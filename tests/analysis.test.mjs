@@ -173,3 +173,18 @@ test('watcher persists failures, backs off and recovers using the same transcrip
   assert.equal(existsSync(errorPath), false);
   assert.equal(workflow.list().length, 1);
 });
+
+for (const fail of [false, true]) {
+  test(`watcher resumes persisted approval${fail ? ' but never retries an uncertain POST' : ' and announces the published issue'}`, async t => {
+    const { watcher, workflow, github, announce } = watcherFor(t, { analyze: async () => analysis() });
+    await watcher.tick(); workflow.settle(Infinity);
+    const draft = workflow.list()[0];
+    workflow.approve(publisher, draft.id, draft.revision, digest(draft));
+    if (fail) github.create.mock.mockImplementation(async () => { throw new Error('Network response lost'); });
+    await watcher.deliver();
+    assert.equal(workflow.get(draft.id).state, fail ? 'uncertain' : 'published');
+    assert.equal(announce.mock.calls.at(-1).arguments[0].state, fail ? 'uncertain' : 'published');
+    await watcher.deliver();
+    assert.equal(github.create.mock.callCount(), 1);
+  });
+}

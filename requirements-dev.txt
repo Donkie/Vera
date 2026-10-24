@@ -1,0 +1,2 @@
+# Test coverage only; CI never installs the ML runtime from requirements.txt.
+coverage==7.15.2

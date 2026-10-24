@@ -24,6 +24,15 @@ jobs:
         with:
           python-version: '3.11'
       - run: npm ci
-      - run: npm test
-      # unittest mocks Whisper, ONNX Runtime and psutil; no pip install or models needed.
-      - run: npm run test:python
+      - run: npm run test:coverage
+      # Only the coverage tool is installed; Whisper, ONNX Runtime and psutil stay mocked.
+      - run: python3 -m pip install -r requirements-dev.txt
+      - run: npm run test:coverage:python
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: |
+            lcov.info
+            coverage-python.xml
+          retention-days: 7

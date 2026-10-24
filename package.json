@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "start": "node --env-file=.env start.mjs",
-    "test": "node --import ./tests/support/offline.mjs --test --test-isolation=none tests/*.test.mjs",
-    "test:python": "python3 -m unittest discover -s tests -p 'test_*.py' -v"
+    "test": "node --experimental-test-module-mocks --import ./tests/support/offline.mjs --test --test-isolation=none tests/*.test.mjs",
+    "test:python": "python3 -m unittest discover -s tests -p 'test_*.py' -v",
+    "test:coverage": "node --experimental-test-module-mocks --import ./tests/support/offline.mjs --test --test-isolation=none --experimental-test-coverage --test-coverage-exclude=tests/** --test-coverage-lines=95 --test-coverage-branches=85 --test-coverage-functions=90 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=lcov.info tests/*.test.mjs",
+    "test:coverage:python": "python3 -m coverage run --branch --source=transcribe -m unittest discover -s tests -p 'test_*.py' && python3 -m coverage report --fail-under=95 --show-missing && python3 -m coverage xml -o coverage-python.xml"
   },
   "engines": {
     "node": ">=24.0.0"

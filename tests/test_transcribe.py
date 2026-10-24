@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import runpy
 from pathlib import Path
 import socket
 import sys
@@ -152,6 +153,42 @@ class TranscribeTests(unittest.TestCase):
                 patch('transcribe.os.nice', create=True), patch('transcribe.os.umask'):
             with self.assertRaisesRegex(SystemExit, 'failed chunks'):
                 transcribe.main()
+
+    def test_cli_rejects_invalid_inputs_before_loading_any_model(self):
+        for arguments in [['watch', '--cpu-threads', '0'], ['replay'],
+                          ['replay', '--session', str(self.session / 'missing')]]:
+            with self.subTest(arguments=arguments), patch.object(sys, 'argv', ['transcribe.py', *arguments]), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as result:
+                    transcribe.main()
+                self.assertEqual(result.exception.code, 2)
+        self.utils.download_model.assert_not_called()
+        self.whisper.WhisperModel.assert_not_called()
+
+    def test_watch_discovers_sessions_and_skips_completed_chunks_on_later_polls(self):
+        saved = self.session / 'saved-session'
+        saved.mkdir()
+        self.path.rename(saved / self.path.name)
+        self.audio.rename(saved / self.audio.name)
+        transcribe.write_json(saved / 'session.json', {})
+        arguments = ['transcribe.py', 'watch', '--root', str(self.session), '--run', 'base-comparison',
+                     '--model', 'KBLab/kb-whisper-base']
+        with patch.object(sys, 'argv', arguments), patch('transcribe.os.nice', create=True), \
+                patch('transcribe.os.umask'), patch('transcribe.time.sleep', side_effect=[None, KeyboardInterrupt]):
+            with self.assertRaises(KeyboardInterrupt):
+                transcribe.main()
+        run = saved / 'recognitions' / 'base-comparison'
+        self.assertEqual(json.loads((run / 'run.json').read_text())['model'], 'KBLab/kb-whisper-base')
+        self.assertEqual(json.loads((run / 'transcript.json').read_text())[0]['speaker'], 'Ada')
+        self.model.transcribe.assert_called_once()
+
+    def test_script_entry_point_handles_ctrl_c_without_a_traceback(self):
+        with patch.object(sys, 'argv', ['transcribe.py', 'watch', '--root', str(self.session)]), \
+                patch('transcribe.os.nice', create=True), patch('transcribe.os.umask'), \
+                patch('transcribe.time.sleep', side_effect=KeyboardInterrupt), \
+                patch('importlib.metadata.version', return_value='mock-version'):
+            runpy.run_path(str(Path(transcribe.__file__)), run_name='__main__')
+        self.model.transcribe.assert_not_called()
 
 
 if __name__ == '__main__':

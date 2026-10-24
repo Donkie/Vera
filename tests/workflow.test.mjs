@@ -159,3 +159,81 @@ test('GitHub rejects HTTP errors, malformed listings and missing credentials', a
   await assert.rejects(new GitHub(settings.repo, '', fetcher).list(), /Configure/);
   assert.equal(fetcher.mock.callCount(), 0);
 });
+
+test('human evidence exclusions and duplicate selections survive later model analysis', t => {
+  const workflow = workflowFor(t);
+  const segments = transcript([...rows, { ...rows[0], start: 3, end: 4, text: 'That first report was mistaken.' }]);
+  const ids = segments.map(row => row.id), result = analysis(ids);
+  workflow.applyAnalysis('session', segments, ids, result, [], 0); workflow.settle(60_000);
+  const draft = workflow.list()[0];
+  workflow.edit(reviewer, draft.id, draft.revision, 'Developer correction', 'Only the second report is relevant.', {
+    evidenceIds: [ids[1]], duplicates: [42], evidenceLabel: 'Relevant original quote',
+  });
+  workflow.applyAnalysis('session', segments, ids, analysis(ids), [], 1000);
+  const updated = workflow.get(draft.id);
+  assert.deepEqual(updated.evidence.map(row => row.id), [ids[1]]);
+  assert.equal(updated.evidence[0].text, segments[1].text);
+  assert.equal(updated.title, 'Developer correction');
+  assert.deepEqual(updated.duplicates, [42]);
+  assert.match(updated.body, /Relevant original quote/);
+  assert.ok(!updated.body.includes(segments[0].text));
+});
+
+test('invalid evidence or duplicate edits roll back the entire approved revision', t => {
+  const workflow = workflowFor(t), draft = seedDraft(workflow);
+  workflow.approve(publisher, draft.id, draft.revision, digest(draft));
+  const before = workflow.get(draft.id), history = workflow.history(draft.id);
+  for (const change of [{ evidenceIds: ['unknown'] }, { evidenceIds: [] }, { duplicates: [-1] }]) {
+    assert.throws(() => workflow.edit(reviewer, draft.id, draft.revision, 'Should not persist', 'Invalid edit', change));
+    assert.deepEqual(workflow.get(draft.id), before);
+    assert.deepEqual(workflow.history(draft.id), history);
+  }
+});
+
+test('rejected and withdrawn topics stay closed; human-corrected drafts resist model withdrawal', t => {
+  for (const decision of ['rejected', 'withdrawn', 'human-edited']) {
+    const workflow = workflowFor(t), draft = seedDraft(workflow), segments = transcript(rows), ids = segments.map(row => row.id);
+    if (decision === 'rejected') workflow.reject(reviewer, draft.id);
+    if (decision === 'human-edited') workflow.edit(reviewer, draft.id, draft.revision, 'Confirmed by a developer', draft.description);
+    workflow.applyAnalysis('session', [], [], { summary: 'The idea was corrected.', candidates: [], withdrawn: [draft.topic] }, [], 1000);
+    workflow.applyAnalysis('session', segments, ids, analysis(ids), [], 2000);
+    assert.equal(workflow.list().length, 1);
+    assert.equal(workflow.get(draft.id).state, decision === 'human-edited' ? 'ready' : decision);
+  }
+});
+
+test('an unrelated topic does not postpone an existing draft settling', t => {
+  const workflow = workflowFor(t), first = seedDraft(workflow, { ready: false });
+  const segments = transcript([{ ...rows[0], start: 10, end: 12, text: 'Add a dark mode.' }]), ids = segments.map(row => row.id);
+  const result = analysis(ids); result.candidates[0].key = 'dark-mode';
+  workflow.applyAnalysis('session', segments, ids, result, [], 59_000);
+  workflow.settle(60_000);
+  assert.equal(workflow.get(first.id).state, 'ready');
+  assert.equal(workflow.list().find(draft => draft.topic === 'dark-mode').state, 'settling');
+});
+
+test('model wording changes cancel approval even without new evidence, without another settling delay', t => {
+  const workflow = workflowFor(t), draft = seedDraft(workflow), segments = transcript(rows), ids = segments.map(row => row.id);
+  workflow.approve(publisher, draft.id, draft.revision, digest(draft));
+  const result = analysis(ids); result.candidates[0].title = 'The save action fails';
+  workflow.applyAnalysis('session', segments, ids, result, [], 61_000);
+  const updated = workflow.get(draft.id);
+  assert.equal(updated.approval, null);
+  assert.equal(updated.state, 'ready');
+  assert.equal(updated.due, draft.due);
+  assert.equal(updated.revision, draft.revision + 1);
+});
+
+test('simultaneous publication calls can reconcile but never send another POST', async t => {
+  const workflow = workflowFor(t), draft = seedDraft(workflow), github = mockGitHub();
+  workflow.approve(publisher, draft.id, draft.revision, digest(draft));
+  let finish;
+  github.create.mock.mockImplementation(payload => new Promise(resolve => { finish = () => resolve({ ...payload,
+    html_url: `https://github.com/${draft.repo}/issues/42` }); }));
+  const posting = workflow.publish(draft.id, github);
+  await assert.rejects(workflow.publish(draft.id, github), /No further create attempt/);
+  finish();
+  await posting;
+  assert.equal(workflow.get(draft.id).state, 'published');
+  assert.equal(github.create.mock.callCount(), 1);
+});

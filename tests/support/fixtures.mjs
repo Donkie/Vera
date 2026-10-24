@@ -30,3 +30,12 @@ export function mockGitHub() {
   return { ...settings, list: mock.fn(async () => []), create: mock.fn(async payload => ({ ...payload, number: 42,
     html_url: `https://github.com/${settings.repo}/issues/42` })) };
 }
+
+export function commandFor(action, values = {}, context = reviewer) {
+  return { user: { id: context.user, bot: !context.human }, guildId: context.guild, channelId: context.channel,
+    memberPermissions: { has: () => context.manageGuild === true }, commandName: 'vera',
+    isButton: () => false, isModalSubmit: () => false, isChatInputCommand: () => true,
+    options: { getSubcommand: () => action, getString: key => values[key] ?? null, getUser: key => values[key] ?? null },
+    reply: mock.fn(async () => {}), deferReply: mock.fn(async () => {}), editReply: mock.fn(async () => {}),
+    showModal: mock.fn(async () => {}), deferUpdate: mock.fn(async () => {}) };
+}
