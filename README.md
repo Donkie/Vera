@@ -6,7 +6,7 @@
 
 Vera is a self-hosted Discord assistant that turns voice discussions into GitHub issue drafts. Use it during project meetings to capture bugs, improvements and ideas, then review and publish them in Discord.
 
-It records each speaker separately, transcribes speech locally with a configurable Whisper model and spoken language, and uses Claude or Ollama to write summaries and drafts in your chosen language. Drafts include original transcript quotes as evidence. An authorized person must approve each issue before it is published. GitHub is optional: recording and draft review work without it.
+It records each speaker separately, transcribes speech locally with a configurable Whisper model and spoken language, and uses Claude or Ollama to write summaries and drafts in your chosen language. Drafts include original transcript quotes as evidence for reviewers; published GitHub issues contain only the title and description. An authorized person must approve each issue before it is published. GitHub is optional: recording and draft review work without it.
 
 ## Run Vera
 
@@ -73,7 +73,7 @@ Choose one provider:
 
 Set `GITHUB_REPO=owner/repository` and `GITHUB_TOKEN` to a repository-scoped token with **Issues: read and write** access. The repository must be active with Issues enabled. Vera checks access at startup and stops if it fails.
 
-Optionally set `GITHUB_ISSUE_LABEL=vera:raw` to mark published issues for later triage with your project's own workflow. Create the label in that repository first and ensure the token's user has access to apply labels. Vera checks that it exists at startup and shows it in Discord review. Leave the setting blank for no label.
+Every published issue gets the `GITHUB_ISSUE_LABEL` label (default `vera:raw`) for later triage with your project's own workflow. Create the label in that repository first and ensure the token's user has access to apply labels. Vera checks that it exists at startup and shows it in Discord review.
 
 Leave **both** `GITHUB_REPO` and `GITHUB_TOKEN` blank to disable publishing. Those sessions' drafts stay local; start a new recording after enabling GitHub to create publishable drafts.
 
@@ -89,7 +89,7 @@ Leave **both** `GITHUB_REPO` and `GITHUB_TOKEN` blank to disable publishing. Tho
 
 For Swedish speech, we recommend [KBLab's KB-Whisper](https://huggingface.co/KBLab/kb-whisper-small), which is the default. For other languages, select a compatible [faster-whisper model](https://github.com/SYSTRAN/faster-whisper#model-conversion) and set `STT_LANGUAGE`; for example, `STT_MODEL=small` and `STT_LANGUAGE=en` for English. Choose a new `STT_RUN` when changing either setting.
 
-Restart after editing `.env`. With Docker, run `docker compose up -d --force-recreate`. Issue language, publishing destination and label are saved per session; changes apply to new sessions. Existing sessions keep their original label, including no label.
+Restart after editing `.env`. With Docker, run `docker compose up -d --force-recreate`. Issue language, publishing destination and label are saved per session; changes apply to new sessions. Existing sessions keep their original label; sessions created before labels were required stay unlabeled.
 
 ## Use Vera
 

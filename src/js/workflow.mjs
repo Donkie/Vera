@@ -28,7 +28,8 @@ function body(draft) {
 // Keep unlabeled hashes stable for saved approvals and uncertain publications.
 export const digest = draft => hash({ repo: draft.repo, mode: draft.mode, language: draft.language, title: draft.title, body: draft.body, ...(draft.label ? { label: draft.label } : {}) });
 export const marker = draft => `<!-- vera:${draft.id}:${digest(draft)} -->`;
-export const publication = draft => ({ title: draft.title, body: `${draft.body}\n\n${marker(draft)}`, ...(draft.label ? { labels: [draft.label] } : {}) });
+// Evidence and duplicates stay in Discord review; GitHub gets only the title and description.
+export const publication = draft => ({ title: draft.title, body: `${draft.description}\n\n${marker(draft)}`, ...(draft.label ? { labels: [draft.label] } : {}) });
 const editable = new Set(['settling', 'ready', 'rejected', 'withdrawn', 'approved']);
 
 export class Workflow {

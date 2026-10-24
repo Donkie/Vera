@@ -113,7 +113,8 @@ test('legacy unlabeled sessions retain approval hashes and publication markers',
   const legacyHash = hash({ repo: draft.repo, mode: draft.mode, language: draft.language, title: draft.title, body: draft.body });
   assert.equal(digest(draft), legacyHash);
   assert.equal(digest({ ...draft, label: '' }), legacyHash);
-  assert.deepEqual(publication(draft), { title: draft.title, body: `${draft.body}\n\n<!-- vera:${draft.id}:${legacyHash} -->` });
+  assert.deepEqual(publication(draft), { title: draft.title, body: `${draft.description}\n\n<!-- vera:${draft.id}:${legacyHash} -->` });
+  assert.ok(!publication(draft).body.includes(draft.evidence[0].text));
   workflow.openSession('session', settings);
   workflow.approve(publisher, draft.id, draft.revision, legacyHash);
   await workflow.publish(draft.id, github);

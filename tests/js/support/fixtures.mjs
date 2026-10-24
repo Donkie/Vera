@@ -33,6 +33,7 @@ export function mockGitHub() {
 
 export function githubAccessResponse(url, options) {
   if (url === `https://api.github.com/repos/${settings.repo}` && options.method === 'GET') return Response.json({ has_issues: true, archived: false, disabled: false });
+  if (url.endsWith('/labels/vera%3Araw') && options.method === 'GET') return Response.json({ name: 'vera:raw' });
   if (url.endsWith('/issues?state=all&per_page=1') && options.method === 'GET') return Response.json([]);
   if (url.endsWith('/issues') && options.method === 'POST' && options.body === '{"title":""}') return Response.json({ message: 'Validation Failed', errors: [{ message: "title can't be blank", value: null, resource: 'Issue', field: 'title', code: 'invalid' }] }, { status: 422 });
   throw new Error('Unexpected GitHub access request');

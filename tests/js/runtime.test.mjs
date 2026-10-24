@@ -31,7 +31,8 @@ test('runtime wires Discord review to mocked GitHub HTTP and updates existing pr
     LLM_PROVIDER: 'ollama', GITHUB_REPO: settings.repo, GITHUB_TOKEN: 'mock-token',
   } });
   assert.equal(runtime.publishingEnabled, true);
-  assert.equal(fetcher.mock.callCount(), 4);
+  assert.equal(fetcher.mock.callCount(), 5);
+  assert.ok(fetcher.mock.calls.some(call => call.arguments[0].endsWith('/labels/vera%3Araw')), 'blank GITHUB_ISSUE_LABEL defaults to vera:raw');
   fetcher.mock.resetCalls();
   t.after(() => { runtime.stop(); runtime.workflow.close(); });
   const user = '123456789012345678';
