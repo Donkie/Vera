@@ -1,0 +1,18 @@
+{
+  "name": "vera-discussion-assistant",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file=.env capture.mjs"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "@discordjs/voice": "0.19.2",
+    "discord.js": "14.27.0",
+    "opusscript": "0.1.1"
+  },
+  "description": "A local assistant for project discussions: recordings, translated issue drafts, human review, and approved GitHub publishing",
+  "license": "MIT"
+}
