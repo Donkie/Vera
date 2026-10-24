@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Socket } from 'node:net';
-import { Workflow, GitHub, digest, publication, transcript } from '../workflow.mjs';
+import { Workflow, GitHub, digest, publication, transcript } from '../../src/js/workflow.mjs';
 import { settings, policy, reviewer, publisher, rows, analysis, workflowFor, seedDraft, mockGitHub } from './support/fixtures.mjs';
 
 test('unmocked HTTP and TCP connections fail before reaching external services', () => {

@@ -10,7 +10,7 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-import transcribe
+from src.python import transcribe
 
 
 class TranscribeTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class TranscribeTests(unittest.TestCase):
         self.whisper, self.utils, self.onnx = whisper, utils, onnx
         self.enterContext(patch.dict(sys.modules, {'faster_whisper': whisper, 'faster_whisper.utils': utils,
                                                  'onnxruntime': onnx, 'psutil': psutil}))
-        self.enterContext(patch('transcribe.version', return_value='mock-version'))
+        self.enterContext(patch('src.python.transcribe.version', return_value='mock-version'))
         self.enterContext(patch.object(socket.socket, 'connect', side_effect=AssertionError('Network disabled in tests')))
         self.enterContext(patch.object(socket, 'create_connection', side_effect=AssertionError('Network disabled in tests')))
         self.enterContext(contextlib.redirect_stdout(io.StringIO()))
@@ -67,7 +67,7 @@ class TranscribeTests(unittest.TestCase):
 
     def test_transcription_strips_empty_segments_and_sets_inference_options(self):
         recognizer = self.recognizer()
-        with patch('transcribe.time.perf_counter', side_effect=[10, 10.25]):
+        with patch('src.python.transcribe.time.perf_counter', side_effect=[10, 10.25]):
             rows, elapsed = recognizer.transcribe(self.audio)
         self.assertEqual(rows, [{'start': 0.1, 'end': 1.5, 'text': 'Spara-knappen fungerar inte.'}])
         self.assertEqual(elapsed, 0.25)
@@ -135,7 +135,7 @@ class TranscribeTests(unittest.TestCase):
     def test_replay_cli_processes_saved_jobs_using_mocked_ml(self):
         transcribe.write_json(self.session / 'session.json', {'session_id': 'session'})
         with patch.object(sys, 'argv', ['transcribe.py', 'replay', '--session', str(self.session)]), \
-                patch('transcribe.os.nice', create=True), patch('transcribe.os.umask'):
+                patch('src.python.transcribe.os.nice', create=True), patch('src.python.transcribe.os.umask'):
             transcribe.main()
         transcript = self.session / 'recognitions' / 'live' / 'transcript.json'
         self.assertEqual(json.loads(transcript.read_text())[0]['text'], 'Spara-knappen fungerar inte.')
@@ -150,7 +150,7 @@ class TranscribeTests(unittest.TestCase):
         transcribe.write_json(self.session / 'session.json', {})
         self.model.transcribe.side_effect = RuntimeError('Mock inference failed')
         with patch.object(sys, 'argv', ['transcribe.py', 'replay', '--session', str(self.session)]), \
-                patch('transcribe.os.nice', create=True), patch('transcribe.os.umask'):
+                patch('src.python.transcribe.os.nice', create=True), patch('src.python.transcribe.os.umask'):
             with self.assertRaisesRegex(SystemExit, 'failed chunks'):
                 transcribe.main()
 
@@ -173,8 +173,8 @@ class TranscribeTests(unittest.TestCase):
         transcribe.write_json(saved / 'session.json', {})
         arguments = ['transcribe.py', 'watch', '--root', str(self.session), '--run', 'base-comparison',
                      '--model', 'KBLab/kb-whisper-base']
-        with patch.object(sys, 'argv', arguments), patch('transcribe.os.nice', create=True), \
-                patch('transcribe.os.umask'), patch('transcribe.time.sleep', side_effect=[None, KeyboardInterrupt]):
+        with patch.object(sys, 'argv', arguments), patch('src.python.transcribe.os.nice', create=True), \
+                patch('src.python.transcribe.os.umask'), patch('src.python.transcribe.time.sleep', side_effect=[None, KeyboardInterrupt]):
             with self.assertRaises(KeyboardInterrupt):
                 transcribe.main()
         run = saved / 'recognitions' / 'base-comparison'
@@ -184,8 +184,8 @@ class TranscribeTests(unittest.TestCase):
 
     def test_script_entry_point_handles_ctrl_c_without_a_traceback(self):
         with patch.object(sys, 'argv', ['transcribe.py', 'watch', '--root', str(self.session)]), \
-                patch('transcribe.os.nice', create=True), patch('transcribe.os.umask'), \
-                patch('transcribe.time.sleep', side_effect=KeyboardInterrupt), \
+                patch('src.python.transcribe.os.nice', create=True), patch('src.python.transcribe.os.umask'), \
+                patch('src.python.transcribe.time.sleep', side_effect=KeyboardInterrupt), \
                 patch('importlib.metadata.version', return_value='mock-version'):
             runpy.run_path(str(Path(transcribe.__file__)), run_name='__main__')
         self.model.transcribe.assert_not_called()

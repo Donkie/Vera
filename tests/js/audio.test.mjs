@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Capture, RATE, wav } from '../audio.mjs';
+import { Capture, RATE, wav } from '../../src/js/audio.mjs';
 
 function captureFor(t) {
   const directory = mkdtempSync(join(tmpdir(), 'vera-audio-'));

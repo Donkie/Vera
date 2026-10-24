@@ -2,7 +2,7 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { resolve } from 'node:path';
-import { start } from '../start.mjs';
+import { start } from '../../src/js/start.mjs';
 
 function launch(t, env = {}) {
   t.mock.method(console, 'error', () => {});
@@ -19,11 +19,11 @@ test('one launcher starts Python and the bot with shared environment and matchin
   const { worker, bot, signals, spawnChild, result } = launch(t, env);
   const [python, args, options] = spawnChild.mock.calls[0].arguments;
   assert.equal(python, resolve('.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'));
-  assert.deepEqual(args, ['transcribe.py', 'watch', '--root', resolve(env.RECORDINGS_DIR), '--run', 'small-cpu', '--model', env.STT_MODEL]);
+  assert.deepEqual(args, ['src/python/transcribe.py', 'watch', '--root', resolve(env.RECORDINGS_DIR), '--run', 'small-cpu', '--model', env.STT_MODEL]);
   assert.equal(options.env, env);
   assert.equal(options.stdio, 'inherit');
   assert.equal(options.detached, process.platform !== 'win32');
-  assert.deepEqual(spawnChild.mock.calls[1].arguments, [process.execPath, ['capture.mjs'], options]);
+  assert.deepEqual(spawnChild.mock.calls[1].arguments, [process.execPath, ['src/js/capture.mjs'], options]);
   signals.emit('SIGINT');
   bot.emit('close', 0, null); worker.emit('close', 0, null);
   assert.equal(await result, 0);
@@ -48,7 +48,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 
 test('default startup uses the same data directory and live run as the bot', async t => {
   const { worker, bot, signals, spawnChild, result } = launch(t);
-  assert.deepEqual(spawnChild.mock.calls[0].arguments[1], ['transcribe.py', 'watch', '--root', resolve('data'), '--run', 'live']);
+  assert.deepEqual(spawnChild.mock.calls[0].arguments[1], ['src/python/transcribe.py', 'watch', '--root', resolve('data'), '--run', 'live']);
   signals.emit('SIGTERM'); bot.emit('close', 0, null); worker.emit('close', 0, null);
   await result;
 });

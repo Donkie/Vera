@@ -1,5 +1,5 @@
 import { mock } from 'node:test';
-import { Workflow, transcript } from '../../workflow.mjs';
+import { Workflow, transcript } from '../../../src/js/workflow.mjs';
 
 export const settings = { repo: 'example/project', mode: 'github', language: 'English' };
 export const reviewer = { user: 'reviewer', human: true, guild: 'guild', channel: 'review' };

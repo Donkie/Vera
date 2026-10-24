@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { GatewayIntentBits, Routes, SlashCommandBuilder } from 'discord.js';
-import { createWorkflow } from '../runtime.mjs';
+import { createWorkflow } from '../../src/js/runtime.mjs';
 import { commandFor } from './support/fixtures.mjs';
 
 async function botFor(t) {
@@ -64,10 +64,10 @@ async function botFor(t) {
     decode(packet) { if (!Buffer.isBuffer(packet)) throw new Error('bad packet'); return packet; }
     delete = mock.fn();
   } });
-  t.mock.module(new URL('../runtime.mjs', import.meta.url), { namedExports: {
+  t.mock.module(new URL('../../src/js/runtime.mjs', import.meta.url), { namedExports: {
     createWorkflow: options => { runtime = createWorkflow(options); return runtime; },
   } });
-  await import('../capture.mjs');
+  await import('../../src/js/capture.mjs');
   const command = async (action, overrides = {}) => {
     const interaction = { ...commandFor(action, {}, context), ...overrides };
     await client.listeners('interactionCreate')[0](interaction);

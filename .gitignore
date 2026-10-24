@@ -12,9 +12,7 @@ sessions/
 .idea/
 __pycache__/
 *.pyc
-.coverage
-lcov.info
-coverage-python.xml
+coverage/
 *.log
 *.sqlite
 *.sqlite-*

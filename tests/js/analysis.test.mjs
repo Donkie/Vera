@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OllamaAnalysis, ClaudeAnalysis, createAnalysis, AnalysisRunner, TranscriptWatcher } from '../analysis.mjs';
-import { writeJson } from '../audio.mjs';
-import { digest } from '../workflow.mjs';
+import { OllamaAnalysis, ClaudeAnalysis, createAnalysis, AnalysisRunner, TranscriptWatcher } from '../../src/js/analysis.mjs';
+import { writeJson } from '../../src/js/audio.mjs';
+import { digest } from '../../src/js/workflow.mjs';
 import { settings, publisher, rows, analysis, input, workflowFor, mockGitHub } from './support/fixtures.mjs';
 
 test('Ollama uses mocked structured responses with CPU-only options and bounded references', async t => {

@@ -1,8 +1,8 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { PermissionFlagsBits } from 'discord.js';
-import { Review, preview, details, contextFor } from '../review.mjs';
-import { digest, transcript, publication } from '../workflow.mjs';
+import { Review, preview, details, contextFor } from '../../src/js/review.mjs';
+import { digest, transcript, publication } from '../../src/js/workflow.mjs';
 import { publisher, reviewer, rows, analysis, candidate, commandFor, workflowFor, seedDraft, mockGitHub } from './support/fixtures.mjs';
 
 function interactionFor(draft, { context = publisher, action = 'approve', suffix = '' } = {}) {

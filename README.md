@@ -8,6 +8,18 @@ Vera turns project discussions into GitHub issue drafts that people can review a
 
 It records voice separately for each speaker, transcribes locally, and uses Claude or Ollama to summarize the discussion and draft issues in your chosen language. Original transcript quotations remain attached to the proposed issue as evidence. Publishing always requires an authorized person's approval of the current revision.
 
+## Repository layout
+
+- `src/js/` — Discord bot, workflow, analysis, and launcher.
+- `src/python/` — transcription worker and Python dependency requirements.
+- `tests/js/` and `tests/python/` — tests separated by language, with offline fixtures.
+- `assets/` — branding images and prompts.
+- `coverage/` — generated test reports (ignored by Git).
+- `data/` and `models/` — local recordings, review state, and model weights (ignored by Git).
+
+Run commands from the repository root. The npm manifest and environment settings
+live there; Python requirements live beside the worker in `src/python/`.
+
 ## Requirements
 
 - Node.js 24 or newer and Python 3.11.
@@ -22,7 +34,7 @@ The default STT configuration is Swedish KB-Whisper small on CPU with `int8` pre
 ```bash
 npm ci
 python3.11 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install -r src/python/requirements.txt
 cp .env.example .env
 chmod 600 .env
 ```
@@ -96,7 +108,7 @@ Recordings are retained until you delete them. Budget roughly 0.7 GB per recorde
 Replay retained audio with small in a separate run (including recordings originally transcribed with base):
 
 ```bash
-.venv/bin/python transcribe.py replay --session data/SESSION_ID \
+.venv/bin/python src/python/transcribe.py replay --session data/SESSION_ID \
   --model KBLab/kb-whisper-small --run small-cpu
 ```
 
@@ -128,7 +140,7 @@ structure while preserving the behavior these tests assert.
 For coverage reports and the same checks as GitHub Actions:
 
 ```bash
-python3 -m pip install -r requirements-dev.txt
+python3 -m pip install -r src/python/requirements-dev.txt
 npm run test:coverage
 npm run test:coverage:python
 ```
@@ -136,12 +148,12 @@ npm run test:coverage:python
 JavaScript uses Node's built-in V8 coverage, excluding tests and dependencies, and
 requires at least 95% lines, 85% branches and 90% functions. All seven application
 modules, including the Discord entry point, are exercised. Python uses `coverage.py`
-with branch measurement and a 95% combined statement/branch minimum for `transcribe.py`.
+with branch measurement and a 95% combined statement/branch minimum for `src/python/transcribe.py`.
 The two tools count coverage differently; their percentages are reported separately.
 
 The workflow in `.github/workflows/tests.yml` runs coverage on pushes and pull requests
-and uploads `lcov.info` and `coverage-python.xml` as a `coverage` artifact. Its only
-Python dependency is the coverage tool; it never installs `requirements.txt` or
+and uploads `coverage/lcov.info` and `coverage/python.xml` as a `coverage` artifact. Its only
+Python dependency is the coverage tool; it never installs `src/python/requirements.txt` or
 downloads ML models. Hugging Face offline flags provide an extra safeguard.
 
 ## Current limits

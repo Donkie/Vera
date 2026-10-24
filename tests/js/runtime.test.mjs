@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createWorkflow } from '../runtime.mjs';
+import { createWorkflow } from '../../src/js/runtime.mjs';
 import { settings, policy, seedDraft, commandFor } from './support/fixtures.mjs';
-import { digest } from '../workflow.mjs';
+import { digest } from '../../src/js/workflow.mjs';
 
 test('runtime wires Discord review to mocked GitHub HTTP and updates existing preview messages', async t => {
   const root = mkdtempSync(join(tmpdir(), 'vera-runtime-'));

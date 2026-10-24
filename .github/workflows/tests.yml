@@ -26,13 +26,12 @@ jobs:
       - run: npm ci
       - run: npm run test:coverage
       # Only the coverage tool is installed; Whisper, ONNX Runtime and psutil stay mocked.
-      - run: python3 -m pip install -r requirements-dev.txt
+      - run: python3 -m pip install -r src/python/requirements-dev.txt
       - run: npm run test:coverage:python
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: coverage
           path: |
-            lcov.info
-            coverage-python.xml
+            coverage/
           retention-days: 7

@@ -30,11 +30,11 @@ export function start({ env = process.env, spawnChild = spawn, signals = process
     signals.on('SIGINT', interrupt);
     signals.on('SIGTERM', interrupt);
 
-    const workerArgs = ['transcribe.py', 'watch', '--root', resolve(env.RECORDINGS_DIR || 'data'), '--run', env.STT_RUN || 'live'];
+    const workerArgs = ['src/python/transcribe.py', 'watch', '--root', resolve(env.RECORDINGS_DIR || 'data'), '--run', env.STT_RUN || 'live'];
     if (env.STT_MODEL) workerArgs.push('--model', env.STT_MODEL);
     const python = resolve('.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
     for (const [name, executable, args] of [
-      ['worker', python, workerArgs], ['bot', process.execPath, ['capture.mjs']],
+      ['worker', python, workerArgs], ['bot', process.execPath, ['src/js/capture.mjs']],
     ]) {
       const child = spawnChild(executable, args, { env, stdio: 'inherit', detached: process.platform !== 'win32' });
       children.set(name, child);
