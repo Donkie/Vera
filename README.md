@@ -1,5 +1,9 @@
 # Vera
 
+<p align="center">
+  <img src="assets/branding/vera-readme-v2.png" alt="Vera — a female android assistant in charcoal, ivory and copper wearing a headset" width="640">
+</p>
+
 Vera is a self-hosted Discord assistant that turns voice discussions into GitHub issue drafts. Use it during project meetings to capture bugs, improvements and ideas, then review and publish them in Discord.
 
 It records each speaker separately, transcribes speech locally with a configurable Whisper model and spoken language, and uses Claude or Ollama to write summaries and drafts in your chosen language. Drafts include original transcript quotes as evidence. An authorized person must approve each issue before it is published. GitHub is optional: recording and draft review work without it.
