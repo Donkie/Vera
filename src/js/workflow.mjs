@@ -48,8 +48,14 @@ export class Workflow {
   close() { this.db.close(); }
   transaction(fn) {
     this.db.exec('BEGIN IMMEDIATE');
-    try { const result = fn(); this.db.exec('COMMIT'); return result; }
+    const pendingLogs = [];
+    this.pendingLogs = pendingLogs;
+    let result;
+    try { result = fn(); this.db.exec('COMMIT'); }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    finally { this.pendingLogs = null; }
+    for (const [draftId, event] of pendingLogs) this.logEvent(draftId, event);
+    return result;
   }
   authorize(context, approval = false) {
     this.authorizeChannel(context);
@@ -105,7 +111,23 @@ export class Workflow {
     return rows.map(row => JSON.parse(row.data)).filter(draft => ['github', 'local'].includes(draft.mode));
   }
   save(draft) { this.db.prepare('INSERT OR REPLACE INTO drafts VALUES (?,?,?,?)').run(draft.id, draft.session_id, draft.topic, JSON.stringify(draft)); }
-  event(draftId, action, user, detail) { this.db.prepare('INSERT INTO events(draft_id,data) VALUES (?,?)').run(draftId, JSON.stringify({ at: new Date().toISOString(), action, user, detail })); }
+  event(draftId, action, user, detail) {
+    const event = { at: new Date().toISOString(), action, user, detail };
+    this.db.prepare('INSERT INTO events(draft_id,data) VALUES (?,?)').run(draftId, JSON.stringify(event));
+    if (this.pendingLogs) this.pendingLogs.push([draftId, event]);
+    else this.logEvent(draftId, event);
+  }
+  logEvent(draftId, { at, action, user, detail }) {
+    if (action === 'analysis' && detail.revision !== 1) return;
+    const metadata = { actor: user, draft: draftId };
+    if (detail?.revision) metadata.revision = detail.revision;
+    if (action === 'access changed') Object.assign(metadata, { target: detail.user, role: detail.role });
+    if (action === 'published') metadata.url = detail;
+    if (action === 'merged') metadata.from = detail.from;
+    if (action === 'merged into') metadata.into = detail;
+    const write = action === 'publication uncertain' ? console.warn : console.log;
+    write(`[${at}] ${action === 'analysis' ? 'draft created' : action}: ${JSON.stringify(metadata)}`);
+  }
   history(id) { return this.db.prepare('SELECT data FROM events WHERE draft_id=? ORDER BY id').all(id).map(row => JSON.parse(row.data)); }
   registerPreview(message, draft) {
     if (message.guildId !== this.policy.guild || message.channelId !== this.policy.channel || !message.author?.bot) throw new Error('Preview must be sent by the bot in the configured review channel');
@@ -151,6 +173,7 @@ export class Workflow {
         if (hasNewDiscussion) { next.state = 'settling'; next.due = now + 60_000; }
         else if (next.state === 'approved') next.state = 'ready';
         this.save(next);
+        if (previous?.approval) this.event(next.id, 'approval invalidated by discussion', 'vera', { revision: next.revision });
         this.event(next.id, 'analysis', 'vera', { revision: next.revision, hash: digest(next) });
       }
       for (const key of result.withdrawn) {
@@ -170,6 +193,7 @@ export class Workflow {
     return this.transaction(() => {
       for (const draft of this.list()) if (draft.state === 'settling' && (draft.due <= now || draft.session_id === finalSession)) {
         draft.state = 'ready'; this.save(draft);
+        this.event(draft.id, 'ready for review', 'vera', { revision: draft.revision });
       }
     });
   }
@@ -262,6 +286,7 @@ export class Workflow {
       let issue;
       if (claim.action === 'create') issue = await github.create(publication(claim.draft));
       else {
+        this.event(id, 'checking publication', 'vera', null);
         const matches = (await github.list()).filter(issue => issue.body?.includes(marker(claim.draft)));
         if (matches.length !== 1) throw new Error('Publication is uncertain. No further create attempt will be made; reconcile after checking GitHub.');
         issue = matches[0];
@@ -273,7 +298,13 @@ export class Workflow {
       });
       return issue.html_url;
     } catch (error) {
-      this.transaction(() => { const draft = this.get(id); if (draft.state !== 'published') { draft.state = 'uncertain'; this.save(draft); } });
+      this.transaction(() => {
+        const draft = this.get(id);
+        if (!['published', 'uncertain'].includes(draft.state)) {
+          draft.state = 'uncertain'; this.save(draft);
+          this.event(id, 'publication uncertain', 'vera', null);
+        }
+      });
       throw error;
     }
   }
@@ -301,7 +332,7 @@ export class GitHub {
     if (!Array.isArray(await this.request('/issues?state=all&per_page=1'))) throw new Error('Invalid GitHub issue list');
     // A blank title reaches issue validation but cannot create an issue.
     const validation = await this.request('/issues', { title: '' }, 422);
-    if (!Array.isArray(validation.errors) || validation.errors.length !== 1 || validation.errors[0].resource !== 'Issue' || validation.errors[0].field !== 'title' || validation.errors[0].code !== 'missing_field') throw new Error('GitHub issue write access could not be verified');
+    if (!Array.isArray(validation.errors) || validation.errors.length !== 1 || validation.errors[0].resource !== 'Issue' || validation.errors[0].field !== 'title' || !['missing_field', 'invalid'].includes(validation.errors[0].code)) throw new Error('GitHub issue write access could not be verified');
   }
   async list() {
     const issues = [];

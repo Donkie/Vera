@@ -111,16 +111,19 @@ test('Discord bot interface', async t => {
   });
 
   await scenario('start/status/stop commands save speaker audio and final jobs, and permit a fresh recording', async bot => {
+    console.log.mock.resetCalls();
     assert.equal((await bot.command('status')).editReply.mock.calls[0].arguments[0], 'No recording active.');
     await bot.command('start');
     assert.match(bot.text.send.mock.calls[0].arguments[0], /Everyone in the voice channel will be recorded/);
     const connection = bot.connections[0];
     connection.receiver.speaking.emit('start', bot.context.user);
     const stream = connection.receiver.subscriptions.get(bot.context.user);
+    const beforePackets = console.log.mock.callCount();
     stream.emit('data', Buffer.alloc(1920));
     stream.emit('data', 'invalid opus');
     connection.emit('debug', 'failed to decrypt SECRET voice credentials');
     const status = await bot.command('status');
+    assert.equal(console.log.mock.callCount(), beforePackets);
     assert.match(status.editReply.mock.calls[0].arguments[0], /1 decoded packets, 1 decode errors, 1 DAVE failures/);
     await bot.command('stop');
     const { path, info, events } = bot.session();
@@ -132,6 +135,12 @@ test('Discord bot interface', async t => {
     assert.ok(events.some(event => event.type === 'decode_error'));
     assert.ok(!JSON.stringify(events).includes('SECRET'));
     assert.equal(bot.decoders[0].delete.mock.callCount(), 1);
+    const activity = console.log.mock.calls.map(call => call.arguments[0]).join('\n');
+    assert.match(activity, /recording started/);
+    assert.match(activity, /recording stopped/);
+    assert.ok(activity.includes(`"actor":"${bot.context.user}"`));
+    assert.ok(activity.includes('"decode_errors":1'));
+    assert.ok(!activity.includes('SECRET'));
     await bot.command('start');
     assert.equal(bot.connections.length, 2);
   });

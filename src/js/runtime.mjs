@@ -18,6 +18,7 @@ export async function createWorkflow({ root, client, guildId, textId, env = proc
   if (publishingEnabled) {
     try { await new GitHub(repo, githubToken).checkAccess(); }
     catch (error) { throw new Error(`GitHub startup check failed: ${error.message}. Set both GITHUB_REPO and GITHUB_TOKEN with Issues read/write access, or leave both unset to disable GitHub.`); }
+    console.log(`GitHub startup check passed: ${repo}.`);
   } else {
     console.warn('\n' + '!'.repeat(72) + '\nWARNING: GITHUB PUBLISHING IS DISABLED\nGITHUB_REPO and GITHUB_TOKEN are unset. Recording, analysis and draft review\nremain available. GitHub posting controls and duplicate lookup are disabled.\n' + '!'.repeat(72) + '\n');
   }

@@ -145,7 +145,9 @@ export class AnalysisRunner {
     }
     this.workflow.settle(now, ended ? sessionId : undefined);
     const updated = this.workflow.session(sessionId);
+    const completed = ended && !updated.ended;
     updated.ended = ended; this.workflow.saveSession(updated);
+    if (completed) console.log(`[${new Date().toISOString()}] analysis complete: ${JSON.stringify({ session: sessionId, segments: updated.processed.length, drafts: this.workflow.list(sessionId).length })}`);
     return this.workflow.list(sessionId);
   }
 }
@@ -191,7 +193,7 @@ export class TranscriptWatcher {
             await this.runners.get(sessionId).ingest(sessionId, rows, { ended });
             this.fingerprints.set(sessionId, fingerprint);
           }
-          this.failures.delete(name);
+          if (this.failures.delete(name)) console.log(`[${new Date().toISOString()}] analysis resumed: ${JSON.stringify({ session: sessionId })}`);
           if (existsSync(join(directory, 'analysis-error.json'))) unlinkSync(join(directory, 'analysis-error.json'));
         } catch (error) {
           const retryAt = Date.now() + 60_000;

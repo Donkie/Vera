@@ -110,6 +110,14 @@ Other useful commands:
 
 If publication is uncertain, check GitHub and use reconcile before taking further action. Vera never automatically repeats issue creation.
 
+The terminal log shows recording start/stop, access changes, new drafts becoming
+ready, review actions, approvals and publication outcomes, plus analysis completion
+and recovery from failures. Activity entries include timestamps and relevant user,
+session or draft IDs. Polling, audio packets, status/view commands and routine model
+revisions stay quiet; transcript text, draft/comment bodies and credentials are not
+included in activity logs. Individual decode errors stay in the local recording log,
+with their count included when recording stops.
+
 Recordings and transcripts remain in the storage folder until you delete them. Transcripts are under `SESSION_ID/recognitions/STT_RUN/` as `transcript.md` and `transcript.json`; review history and access grants are in `workflow.sqlite`. Allow roughly 0.7 GB per recorded speaker-hour, agree on retention with participants, and back up the storage together. Review transcripts and drafts for recognition or AI mistakes before publishing.
 
 For development, tests and replaying saved audio, see [CONTRIBUTING.md](CONTRIBUTING.md). Agent navigation is in [AGENTS.md](AGENTS.md).

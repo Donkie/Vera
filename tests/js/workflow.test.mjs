@@ -171,6 +171,15 @@ test('GitHub startup checks repository, issue reading, and write access without 
   assert.ok(options.signal instanceof AbortSignal);
 });
 
+test('GitHub startup accepts both blank-title validation codes', async () => {
+  for (const code of ['invalid', 'missing_field']) {
+    const fetcher = async (url, options) => options.method === 'POST'
+      ? Response.json({ message: 'Validation Failed', errors: [{ message: "title can't be blank", value: null, resource: 'Issue', field: 'title', code }] }, { status: 422 })
+      : githubAccessResponse(url, options);
+    await new GitHub(settings.repo, 'test-token', fetcher).checkAccess();
+  }
+});
+
 for (const status of [401, 403, 404, 410, 429, 500]) {
   test(`GitHub startup refuses HTTP ${status} during read or write checks`, async () => {
     for (const failAt of [0, 1, 2]) {
@@ -186,7 +195,7 @@ test('GitHub startup rejects unavailable repositories and ambiguous validation r
   for (const repo of [{ has_issues: false }, { has_issues: true, archived: true }, { has_issues: true, disabled: true }]) {
     await assert.rejects(new GitHub(settings.repo, 'test-token', async () => Response.json(repo)).checkAccess(), /active with Issues enabled/);
   }
-  for (const errors of [undefined, [], [{ resource: 'Issue', field: 'title', code: 'custom' }], [{ resource: 'Issue', field: 'body', code: 'missing_field' }]]) {
+  for (const errors of [undefined, [], [{ resource: 'Issue', field: 'title', code: 'custom' }], [{ resource: 'Issue', field: 'body', code: 'missing_field' }], [{ resource: 'Repository', field: 'title', code: 'invalid' }]]) {
     const fetcher = async (url, options) => options.method === 'POST' ? Response.json({ errors }, { status: 422 }) : githubAccessResponse(url, options);
     await assert.rejects(new GitHub(settings.repo, 'test-token', fetcher).checkAccess(), /write access could not be verified/);
   }
@@ -274,4 +283,88 @@ test('simultaneous publication calls can reconcile but never send another POST',
   await posting;
   assert.equal(workflow.get(draft.id).state, 'published');
   assert.equal(github.create.mock.callCount(), 1);
+});
+
+test('activity logs identify actions, actors and drafts without exposing discussion or review text', async t => {
+  const log = t.mock.method(console, 'log', () => {});
+  const workflow = workflowFor(t), draft = seedDraft(workflow), github = mockGitHub();
+  workflow.setAccess({ ...reviewer, manageGuild: true }, 'new-user', 'reviewer');
+  workflow.note(reviewer, draft.id, 'PRIVATE comment contents');
+  const edited = workflow.edit(reviewer, draft.id, draft.revision, 'PRIVATE title', 'PRIVATE description');
+  workflow.approve(publisher, edited.id, edited.revision, digest(edited));
+  const url = await workflow.publish(draft.id, github);
+  const lines = log.mock.calls.map(call => call.arguments[0]);
+  for (const action of ['draft created', 'ready for review', 'access changed', 'comment', 'edited', 'approved', 'publication attempt', 'published']) {
+    assert.ok(lines.some(line => line.includes(`] ${action}:`)), `Missing ${action}`);
+  }
+  const access = lines.find(line => line.includes('] access changed:'));
+  assert.ok(access.includes('"actor":"reviewer"') && access.includes('"target":"new-user"') && access.includes('"role":"reviewer"'));
+  assert.ok(lines.find(line => line.includes('] approved:')).includes(`"draft":"${draft.id}"`));
+  assert.ok(lines.find(line => line.includes('] published:')).includes(url));
+  assert.ok(lines.every(line => /^\[\d{4}-\d{2}-\d{2}T/.test(line)));
+  assert.ok(!lines.join('\n').includes('PRIVATE'));
+  assert.ok(!lines.join('\n').includes(rows[0].text));
+});
+
+test('activity logs appear after commit and rolled-back events are never printed', t => {
+  const workflow = workflowFor(t), draft = seedDraft(workflow);
+  const log = t.mock.method(console, 'log', () => {});
+  const before = workflow.history(draft.id);
+  assert.throws(() => workflow.transaction(() => {
+    workflow.event(draft.id, 'rejected', reviewer.user, null);
+    assert.equal(log.mock.callCount(), 0);
+    throw new Error('Force rollback');
+  }), /Force rollback/);
+  assert.equal(log.mock.callCount(), 0);
+  assert.deepEqual(workflow.history(draft.id), before);
+  workflow.note(reviewer, draft.id, 'Saved after rollback');
+  assert.equal(log.mock.callCount(), 1);
+  workflow.transaction(() => {
+    workflow.event(draft.id, 'edited', reviewer.user, { revision: 2 });
+    assert.equal(log.mock.callCount(), 1);
+  });
+  assert.equal(log.mock.callCount(), 2);
+});
+
+test('reads, repeated settling, routine model revisions and repeated publication stay quiet', async t => {
+  const workflow = workflowFor(t), draft = seedDraft(workflow), github = mockGitHub();
+  const log = t.mock.method(console, 'log', () => {});
+  workflow.get(draft.id); workflow.list(); workflow.history(draft.id); workflow.role(reviewer.user);
+  workflow.settle(); workflow.settle();
+  const segments = transcript(rows), result = analysis(segments.map(s => s.id));
+  result.candidates[0].title = 'New wording from the model';
+  workflow.applyAnalysis('session', segments, [], result, []);
+  assert.equal(log.mock.callCount(), 0);
+  const current = workflow.get(draft.id);
+  workflow.approve(publisher, current.id, current.revision, digest(current));
+  const count = log.mock.callCount();
+  workflow.approve(publisher, current.id, current.revision, digest(current));
+  assert.equal(log.mock.callCount(), count);
+  await workflow.publish(current.id, github);
+  log.mock.resetCalls();
+  await workflow.publish(current.id, github);
+  assert.equal(log.mock.callCount(), 0);
+});
+
+test('discussion invalidating an approval is logged even though normal model revisions are quiet', t => {
+  const workflow = workflowFor(t), draft = seedDraft(workflow);
+  workflow.approve(publisher, draft.id, draft.revision, digest(draft));
+  const log = t.mock.method(console, 'log', () => {});
+  const segments = transcript(rows), result = analysis(segments.map(s => s.id));
+  result.candidates[0].title = 'Corrected model wording';
+  workflow.applyAnalysis('session', segments, [], result, []);
+  assert.equal(log.mock.callCount(), 1);
+  assert.match(log.mock.calls[0].arguments[0], /approval invalidated by discussion/);
+});
+
+test('uncertain publication warns once without echoing raw request errors', async t => {
+  const workflow = workflowFor(t), draft = seedDraft(workflow), github = mockGitHub();
+  workflow.approve(publisher, draft.id, draft.revision, digest(draft));
+  const warn = t.mock.method(console, 'warn', () => {});
+  github.create.mock.mockImplementation(async () => { throw new Error('SECRET request details'); });
+  await assert.rejects(workflow.publish(draft.id, github), /SECRET/);
+  await assert.rejects(workflow.publish(draft.id, github), /No further create attempt/);
+  assert.equal(warn.mock.callCount(), 1);
+  assert.match(warn.mock.calls[0].arguments[0], /publication uncertain/);
+  assert.ok(!warn.mock.calls[0].arguments[0].includes('SECRET'));
 });

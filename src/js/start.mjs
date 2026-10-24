@@ -17,6 +17,7 @@ export function start({ env = process.env, spawnChild = spawn, signals = process
     const stop = code => {
       if (stopping) return;
       stopping = true; exitCode = code;
+      console.log(`[${new Date().toISOString()}] Stopping Vera (exit code ${code}).`);
       // Let the bot save its final WAV/jobs before stopping transcription.
       if (children.has('bot')) children.get('bot').kill('SIGTERM');
       else children.get('worker')?.kill('SIGINT');

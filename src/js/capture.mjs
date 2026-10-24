@@ -27,10 +27,12 @@ let active;
 let starting = false;
 
 function event(session, type, detail = {}) {
-  appendFileSync(join(session.directory, 'events.jsonl'), JSON.stringify({ at: new Date().toISOString(), type, ...detail }) + '\n', { mode: 0o600 });
+  const entry = { at: new Date().toISOString(), type, ...detail };
+  appendFileSync(join(session.directory, 'events.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
+  if (type !== 'decode_error') console.log(`[${entry.at}] recording ${type}: ${JSON.stringify({ session: session.info.session_id, ...detail })}`);
 }
 
-async function stop(reason) {
+async function stop(reason, actor = 'vera') {
   const session = active;
   if (!session) return;
   active = undefined;
@@ -43,11 +45,11 @@ async function stop(reason) {
     late_packets: session.capture.latePackets, decode_errors: session.decodeErrors,
     dave_failures: session.daveFailures, reason,
   });
-  event(session, 'stopped', { reason, duration });
+  event(session, 'stopped', { actor, reason, duration, packets: session.capture.packets, decode_errors: session.decodeErrors, dave_failures: session.daveFailures });
   await session.text.send(`Recording stopped: ${reason}. ${session.capture.packets} packets captured; final audio queued for transcription.`);
 }
 
-async function start() {
+async function start(actor) {
   snowflake('DISCORD_VOICE_CHANNEL_ID');
   if (active || starting) throw new Error('A recording is already active or starting');
   starting = true;
@@ -67,8 +69,7 @@ async function start() {
     const session = { directory, info, text, connection, capture: new Capture(directory), started: performance.now(), decodeErrors: 0, daveFailures: 0 };
     active = session;
     writeJson(join(directory, 'session.json'), info);
-    console.log(`Recording: ${directory}`);
-    event(session, 'started');
+    event(session, 'started', { actor, directory });
     connection.on('debug', message => {
       // Raw voice debug output includes session credentials; store counters only.
       if (/failed to decrypt/i.test(message)) session.daveFailures++;
@@ -147,10 +148,10 @@ client.on('interactionCreate', async interaction => {
   await interaction.deferReply({ flags: 64 });
   try {
     const action = interaction.options.getSubcommand();
-    if (action === 'start') await interaction.editReply(await start());
+    if (action === 'start') await interaction.editReply(await start(interaction.user.id));
     if (action === 'stop') {
       if (starting) throw new Error('Still connecting; wait for start to finish');
-      await stop('Stopped by a controller');
+      await stop('Stopped by a controller', interaction.user.id);
       await interaction.editReply('Recording is stopped.');
     }
     if (action === 'status') {

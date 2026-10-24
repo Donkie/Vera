@@ -95,6 +95,7 @@ test('provider configuration and oversized context fail before any model request
 });
 
 test('analysis runner batches 12 turns, restores evidence IDs and does not reprocess transcripts', async t => {
+  const log = t.mock.method(console, 'log', () => {});
   const workflow = workflowFor(t), github = mockGitHub();
   const analyzer = { analyze: mock.fn(async request => analysis(request.new_segment_ids)) };
   const runner = new AnalysisRunner(workflow, analyzer, github);
@@ -110,6 +111,7 @@ test('analysis runner batches 12 turns, restores evidence IDs and does not repro
   assert.equal(analyzer.analyze.mock.callCount(), 2);
   assert.equal(github.list.mock.callCount(), 1);
   assert.equal(github.create.mock.callCount(), 0);
+  assert.equal(log.mock.calls.filter(call => call.arguments[0].includes('] analysis complete:')).length, 1);
 });
 
 test('invented model citations are rejected without advancing transcript progress', async t => {
@@ -201,6 +203,7 @@ test('local sessions analyze and settle drafts without a GitHub publisher', asyn
 
 test('watcher persists failures, backs off and recovers using the same transcript', async t => {
   t.mock.method(console, 'error', () => {});
+  const log = t.mock.method(console, 'log', () => {});
   const analyzer = { analyze: mock.fn(async () => { throw new Error('Mock model unavailable'); }) };
   const { watcher, workflow, directory } = watcherFor(t, analyzer);
   await watcher.tick();
@@ -214,6 +217,8 @@ test('watcher persists failures, backs off and recovers using the same transcrip
   await watcher.tick();
   assert.equal(existsSync(errorPath), false);
   assert.equal(workflow.list().length, 1);
+  await watcher.tick();
+  assert.equal(log.mock.calls.filter(call => call.arguments[0].includes('] analysis resumed:')).length, 1);
 });
 
 for (const fail of [false, true]) {
