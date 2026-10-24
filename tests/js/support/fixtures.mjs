@@ -28,7 +28,7 @@ export function seedDraft(workflow, { ready = true } = {}) {
 
 export function mockGitHub() {
   return { ...settings, list: mock.fn(async () => []), create: mock.fn(async payload => ({ ...payload, number: 42,
-    html_url: `https://github.com/${settings.repo}/issues/42` })) };
+    labels: (payload.labels || []).map(name => ({ name })), html_url: `https://github.com/${settings.repo}/issues/42` })) };
 }
 
 export function githubAccessResponse(url, options) {

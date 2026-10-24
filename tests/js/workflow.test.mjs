@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Socket } from 'node:net';
-import { Workflow, GitHub, digest, publication, transcript } from '../../src/js/workflow.mjs';
+import { Workflow, GitHub, digest, hash, publication, transcript } from '../../src/js/workflow.mjs';
 import { settings, policy, reviewer, publisher, rows, analysis, workflowFor, seedDraft, mockGitHub, githubAccessResponse } from './support/fixtures.mjs';
 
 test('unmocked HTTP and TCP connections fail before reaching external services', () => {
@@ -58,26 +58,96 @@ test('approved content is posted exactly once through a mocked publisher', async
   assert.equal(workflow.history(draft.id).filter(e => e.action === 'publication attempt').length, 1);
 });
 
-test('uncertain POSTs reconcile after restart without a second creation attempt', async t => {
-  const directory = mkdtempSync(join(tmpdir(), 'vera-workflow-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const path = join(directory, 'workflow.sqlite');
-  const workflow = new Workflow(path, policy);
-  workflow.openSession('session', settings);
+for (const label of ['', 'vera:raw']) {
+  test(`uncertain POSTs reconcile after restart without a second creation attempt (label: ${label || 'none'})`, async t => {
+    const directory = mkdtempSync(join(tmpdir(), 'vera-workflow-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const path = join(directory, 'workflow.sqlite');
+    const workflow = new Workflow(path, policy);
+    workflow.openSession('session', { ...settings, label });
+    const draft = seedDraft(workflow), github = mockGitHub();
+    workflow.approve(publisher, draft.id, draft.revision, digest(draft));
+    github.create.mock.mockImplementation(async () => { throw new Error('Connection lost after POST'); });
+    try {
+      await assert.rejects(workflow.publish(draft.id, github), /Connection lost/);
+      assert.equal(workflow.get(draft.id).state, 'uncertain');
+    } finally { workflow.close(); }
+    const reopened = new Workflow(path, policy);
+    t.after(() => reopened.close());
+    assert.equal(reopened.session('session').label, label);
+    assert.equal(reopened.get(draft.id).label, label);
+    await assert.rejects(reopened.publish(draft.id, github), /No further create attempt/);
+    github.list.mock.mockImplementation(async () => [{ ...publication(draft), labels: [{ name: label }], html_url: `https://github.com/${settings.repo}/issues/42` }]);
+    await reopened.publish(draft.id, github);
+    assert.equal(github.create.mock.callCount(), 1);
+    assert.equal(reopened.get(draft.id).state, 'published');
+  });
+}
+
+test('labels are fixed per session and changing an approved label prevents publication', async t => {
+  const workflow = new Workflow(':memory:', policy);
+  t.after(() => workflow.close());
+  workflow.openSession('session', { ...settings, label: ' vera:raw ' });
   const draft = seedDraft(workflow), github = mockGitHub();
+  assert.equal(draft.label, 'vera:raw');
+  assert.deepEqual(publication(draft).labels, ['vera:raw']);
+  assert.throws(() => workflow.openSession('session', settings), /configuration changed/);
+  assert.throws(() => workflow.openSession('session', { ...settings, label: 'other' }), /configuration changed/);
+  for (const label of [null, 42, ' ', 'x'.repeat(51)]) {
+    assert.throws(() => workflow.openSession('invalid', { ...settings, label }), /Invalid issue label/);
+  }
   workflow.approve(publisher, draft.id, draft.revision, digest(draft));
-  github.create.mock.mockImplementation(async () => { throw new Error('Connection lost after POST'); });
-  try {
-    await assert.rejects(workflow.publish(draft.id, github), /Connection lost/);
+  const changed = { ...workflow.get(draft.id), label: 'other' };
+  assert.notEqual(digest(changed), digest(draft));
+  workflow.save(changed);
+  assert.throws(() => workflow.approve(publisher, draft.id, draft.revision, digest(draft)), /stale/);
+  await assert.rejects(workflow.publish(draft.id, github), /Explicit approval/);
+  assert.equal(github.create.mock.callCount(), 0);
+});
+
+test('legacy unlabeled sessions retain approval hashes and publication markers', async t => {
+  const workflow = workflowFor(t), draft = seedDraft(workflow), github = mockGitHub();
+  const session = workflow.session('session');
+  delete session.label; workflow.saveSession(session);
+  delete draft.label; workflow.save(draft);
+  const legacyHash = hash({ repo: draft.repo, mode: draft.mode, language: draft.language, title: draft.title, body: draft.body });
+  assert.equal(digest(draft), legacyHash);
+  assert.equal(digest({ ...draft, label: '' }), legacyHash);
+  assert.deepEqual(publication(draft), { title: draft.title, body: `${draft.body}\n\n<!-- vera:${draft.id}:${legacyHash} -->` });
+  workflow.openSession('session', settings);
+  workflow.approve(publisher, draft.id, draft.revision, legacyHash);
+  await workflow.publish(draft.id, github);
+  assert.equal(workflow.get(draft.id).state, 'published');
+});
+
+test('missing GitHub labels stay uncertain and reconcile without another creation attempt', async t => {
+  for (const labels of [undefined, [], [null, { name: 'other' }]]) {
+    const workflow = new Workflow(':memory:', policy);
+    t.after(() => workflow.close());
+    workflow.openSession('session', { ...settings, label: 'vera:raw' });
+    const draft = seedDraft(workflow), github = mockGitHub();
+    workflow.approve(publisher, draft.id, draft.revision, digest(draft));
+    github.create.mock.mockImplementation(async payload => ({ ...payload, labels, html_url: `https://github.com/${settings.repo}/issues/42` }));
+    await assert.rejects(workflow.publish(draft.id, github), /approved issue label/);
     assert.equal(workflow.get(draft.id).state, 'uncertain');
-  } finally { workflow.close(); }
-  const reopened = new Workflow(path, policy);
-  t.after(() => reopened.close());
-  await assert.rejects(reopened.publish(draft.id, github), /No further create attempt/);
-  github.list.mock.mockImplementation(async () => [{ ...publication(draft), html_url: `https://github.com/${settings.repo}/issues/42` }]);
-  await reopened.publish(draft.id, github);
-  assert.equal(github.create.mock.callCount(), 1);
-  assert.equal(reopened.get(draft.id).state, 'published');
+    github.list.mock.mockImplementation(async () => [{ ...publication(draft), labels, html_url: `https://github.com/${settings.repo}/issues/42` }]);
+    await assert.rejects(workflow.publish(draft.id, github), /approved issue label/);
+    github.list.mock.mockImplementation(async () => [{ ...publication(draft), labels: [{ name: 'vera:raw' }, { name: 'triage' }], html_url: `https://github.com/${settings.repo}/issues/42` }]);
+    await workflow.publish(draft.id, github);
+    assert.equal(github.create.mock.callCount(), 1);
+    assert.equal(workflow.get(draft.id).state, 'published');
+  }
+});
+
+test('merging drafts with different labels is refused without changing either draft', t => {
+  const workflow = workflowFor(t), first = seedDraft(workflow), segments = transcript(rows);
+  workflow.openSession('labeled', { ...settings, label: 'vera:raw' });
+  workflow.applyAnalysis('labeled', segments, segments.map(s => s.id), analysis(segments.map(s => s.id)), [], 0);
+  workflow.settle(60_000);
+  const second = workflow.list('labeled')[0];
+  assert.throws(() => workflow.merge(reviewer, first.id, second.id), /same.*issue label/);
+  assert.deepEqual(workflow.get(first.id), first);
+  assert.deepEqual(workflow.get(second.id), second);
 });
 
 test('a mismatched GitHub response stays uncertain and a different destination is refused', async t => {
@@ -178,6 +248,18 @@ test('GitHub startup accepts both blank-title validation codes', async () => {
       : githubAccessResponse(url, options);
     await new GitHub(settings.repo, 'test-token', fetcher).checkAccess();
   }
+});
+
+test('GitHub startup verifies the configured label using an encoded name', async () => {
+  const label = 'vera:raw';
+  const fetcher = mock.fn(async (url, options) => url.endsWith(`/labels/${encodeURIComponent(label)}`)
+    ? Response.json({ name: label }) : githubAccessResponse(url, options));
+  await new GitHub(settings.repo, 'test-token', fetcher).checkAccess(label);
+  assert.equal(fetcher.mock.callCount(), 4);
+  assert.equal(fetcher.mock.calls[1].arguments[0], `https://api.github.com/repos/${settings.repo}/labels/vera%3Araw`);
+  assert.equal(fetcher.mock.calls[1].arguments[1].method, 'GET');
+  const mismatch = async (url, options) => url.includes('/labels/') ? Response.json({ name: 'other' }) : githubAccessResponse(url, options);
+  await assert.rejects(new GitHub(settings.repo, 'test-token', mismatch).checkAccess(label), /existing repository label/);
 });
 
 for (const status of [401, 403, 404, 410, 429, 500]) {

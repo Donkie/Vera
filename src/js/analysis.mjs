@@ -186,7 +186,7 @@ export class TranscriptWatcher {
           const sessionId = info.session_id || name;
           const saved = this.workflow.session(sessionId);
           if (saved && !['github', 'local'].includes(saved.mode)) continue;
-          const settings = saved ? { repo: saved.repo, language: saved.language, mode: saved.mode } : this.config;
+          const settings = saved ? { repo: saved.repo, language: saved.language, mode: saved.mode, label: saved.label } : this.config;
           this.workflow.openSession(sessionId, settings);
           if (!this.runners.has(sessionId)) this.runners.set(sessionId, new AnalysisRunner(this.workflow, this.analyzer, this.publisherFor(settings.mode, settings.repo)));
           if (this.fingerprints.get(sessionId) !== fingerprint) {

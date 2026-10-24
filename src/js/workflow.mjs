@@ -25,9 +25,10 @@ function body(draft) {
   const duplicates = draft.duplicates.length ? `\n\n### ${draft.duplicates_label}\n${draft.duplicates.map(n => `- https://github.com/${draft.repo}/issues/${n}`).join('\n')}` : '';
   return `${draft.description}\n\n### ${draft.evidence_label}\n${evidence}${duplicates}`;
 }
-export const digest = draft => hash({ repo: draft.repo, mode: draft.mode, language: draft.language, title: draft.title, body: draft.body });
+// Keep unlabeled hashes stable for saved approvals and uncertain publications.
+export const digest = draft => hash({ repo: draft.repo, mode: draft.mode, language: draft.language, title: draft.title, body: draft.body, ...(draft.label ? { label: draft.label } : {}) });
 export const marker = draft => `<!-- vera:${draft.id}:${digest(draft)} -->`;
-export const publication = draft => ({ title: draft.title, body: `${draft.body}\n\n${marker(draft)}` });
+export const publication = draft => ({ title: draft.title, body: `${draft.body}\n\n${marker(draft)}`, ...(draft.label ? { labels: [draft.label] } : {}) });
 const editable = new Set(['settling', 'ready', 'rejected', 'withdrawn', 'approved']);
 
 export class Workflow {
@@ -90,14 +91,15 @@ export class Workflow {
   }
   session(id) { const row = this.db.prepare('SELECT data FROM sessions WHERE id=?').get(id); return row ? JSON.parse(row.data) : null; }
   saveSession(session) { this.db.prepare('INSERT OR REPLACE INTO sessions VALUES (?,?)').run(session.id, JSON.stringify(session)); }
-  openSession(id, { repo, language, mode }) {
+  openSession(id, { repo, language, mode, label = '' }) {
     if (!(mode === 'local' && repo === null) && !(mode === 'github' && /^[\w.-]+\/[\w.-]+$/.test(repo))) throw new Error('Configure a valid repository and publish mode');
+    if (label !== '') label = text(label, 'issue label', 50);
     const previous = this.session(id);
     if (previous) {
-      if (previous.repo !== repo || previous.language !== language || previous.mode !== mode) throw new Error('Session configuration changed; use a new session ID to avoid changing previously reviewed content');
+      if (previous.repo !== repo || previous.language !== language || previous.mode !== mode || (previous.label || '') !== label) throw new Error('Session configuration changed; use a new session ID to avoid changing previously reviewed content');
       return previous;
     }
-    const session = { id: text(id, 'session ID', 100), repo, language: text(language, 'issue language', 80), mode, processed: [], segments: {}, summary: '', ended: false };
+    const session = { id: text(id, 'session ID', 100), repo, language: text(language, 'issue language', 80), mode, label, processed: [], segments: {}, summary: '', ended: false };
     this.saveSession(session);
     return session;
   }
@@ -163,7 +165,7 @@ export class Workflow {
         const hasNewDiscussion = !previous || candidate.evidence.some(s => !previous.evidence.some(old => old.id === s.id));
         const next = previous
           ? { ...previous, ...candidate, topic: previous.topic, title: previous.human_edited ? previous.title : candidate.title, description: previous.human_edited ? previous.description : candidate.description }
-          : { ...candidate, id: randomUUID().replaceAll('-', '').slice(0, 16), session_id: sessionId, repo: session.repo, mode: session.mode, language: session.language, revision: 0, human_edited: false, state: 'settling', approval: null, url: null };
+          : { ...candidate, id: randomUUID().replaceAll('-', '').slice(0, 16), session_id: sessionId, repo: session.repo, mode: session.mode, language: session.language, label: session.label || '', revision: 0, human_edited: false, state: 'settling', approval: null, url: null };
         // Never drop evidence when a later analysis window only refers to the latest turn.
         next.evidence = [...new Map([...(previous?.evidence ?? []), ...candidate.evidence].map(s => [s.id, s])).values()].sort((a, b) => a.start - b.start);
         next.body = text(body(next), 'issue body (split this topic if too large)', 60_000);
@@ -240,7 +242,7 @@ export class Workflow {
     this.authorize(context);
     return this.transaction(() => {
       const keep = this.get(keepId), remove = this.get(removeId);
-      if (keepId === removeId || [keep, remove].some(d => !['ready', 'settling', 'approved'].includes(d.state)) || ['repo', 'language', 'mode'].some(key => keep[key] !== remove[key])) throw new Error('Choose two unpublished drafts for the same repository, language, and publish mode');
+      if (keepId === removeId || [keep, remove].some(d => !['ready', 'settling', 'approved'].includes(d.state)) || ['repo', 'language', 'mode'].some(key => keep[key] !== remove[key]) || (keep.label || '') !== (remove.label || '')) throw new Error('Choose two unpublished drafts for the same repository, language, publish mode, and issue label');
       keep.description = text(`${keep.description}\n\n---\n\n${remove.description}`, 'combined description (shorten it with Edit first)', 3500);
       keep.evidence = [...new Map([...keep.evidence, ...remove.evidence].map(s => [s.id, s])).values()];
       keep.excluded_evidence = [...new Set([...(keep.excluded_evidence || []), ...(remove.excluded_evidence || [])])].filter(id => !keep.evidence.some(s => s.id === id));
@@ -292,6 +294,7 @@ export class Workflow {
         issue = matches[0];
       }
       if (issue.title !== claim.draft.title || issue.body !== publication(claim.draft).body || typeof issue.html_url !== 'string' || !issue.html_url.startsWith(`https://github.com/${github.repo}/issues/`)) throw new Error('GitHub response does not match the approved issue');
+      if (claim.draft.label && (!Array.isArray(issue.labels) || !issue.labels.some(label => label?.name === claim.draft.label))) throw new Error('GitHub did not return the approved issue label. Check label permissions and use reconcile after correcting the label on GitHub; no further create attempt will be made.');
       this.transaction(() => {
         const draft = this.get(id); draft.state = 'published'; draft.url = issue.html_url; this.save(draft);
         this.event(id, 'published', 'vera', draft.url);
@@ -326,9 +329,10 @@ export class GitHub {
     if (expectedStatus ? response.status !== expectedStatus : !response.ok) throw new Error(`GitHub returned HTTP ${response.status}`);
     return response.json();
   }
-  async checkAccess() {
+  async checkAccess(label = '') {
     const repo = await this.request('');
     if (!repo.has_issues || repo.archived || repo.disabled) throw new Error('GitHub repository must be active with Issues enabled');
+    if (label && (await this.request(`/labels/${encodeURIComponent(label)}`)).name !== label) throw new Error('GITHUB_ISSUE_LABEL must match an existing repository label');
     if (!Array.isArray(await this.request('/issues?state=all&per_page=1'))) throw new Error('Invalid GitHub issue list');
     // A blank title reaches issue validation but cannot create an issue.
     const validation = await this.request('/issues', { title: '' }, 422);

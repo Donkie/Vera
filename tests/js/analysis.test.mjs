@@ -169,6 +169,23 @@ test('watcher waits for final STT chunks, announces once and never auto-approves
   assert.equal(github.create.mock.callCount(), 0);
 });
 
+test('watcher applies labels to new sessions and preserves saved labels after configuration changes', async t => {
+  const { watcher, workflow, directory } = watcherFor(t, { analyze: async () => analysis() });
+  const legacy = workflow.session('session');
+  delete legacy.label; workflow.saveSession(legacy);
+  watcher.config.label = 'vera:raw';
+  await watcher.tick();
+  assert.equal(workflow.list('session')[0].label, '');
+  writeJson(join(directory, 'session.json'), { session_id: 'new-session', status: 'stopped' });
+  await watcher.tick();
+  assert.equal(workflow.session('new-session').label, 'vera:raw');
+  assert.equal(workflow.list('new-session')[0].label, 'vera:raw');
+  watcher.config.label = 'other';
+  await watcher.tick();
+  assert.equal(existsSync(join(directory, 'analysis-error.json')), false);
+  assert.equal(workflow.session('new-session').label, 'vera:raw');
+});
+
 test('watcher waits for speech tails and checks completion against every source job', async t => {
   const { watcher, workflow, directory, chunks } = watcherFor(t, { analyze: async () => analysis() });
   writeJson(join(chunks, 'speech-123-0.result.json'), { segments: rows });

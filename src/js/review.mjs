@@ -1,4 +1,4 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionFlagsBits } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionFlagsBits, escapeMarkdown } from 'discord.js';
 import { digest } from './workflow.mjs';
 
 export const contextFor = interaction => ({ user: interaction.user.id, human: !interaction.user.bot, guild: interaction.guildId, channel: interaction.channelId,
@@ -9,7 +9,7 @@ const button = (action, draft, label, style = ButtonStyle.Secondary, suffix = ''
   .setCustomId(`${action}:${token(draft)}${suffix}`).setLabel(label).setStyle(style);
 const approveButton = (draft, reviewed = false) => button('approve', draft, 'Post issue', ButtonStyle.Success, reviewed ? ':reviewed' : '')
   .setDisabled(!reviewed && draft.body.length > 3500);
-const heading = draft => `Draft \`${draft.id}\` · **${draft.state}** · r${draft.revision} · ${draft.repo || 'No repository'} · ${draft.language} · **${draft.mode.toUpperCase()}**${draft.url ? `\n<${draft.url}>` : ''}`;
+const heading = draft => `Draft \`${draft.id}\` · **${draft.state}** · r${draft.revision} · ${draft.repo || 'No repository'} · ${draft.language} · **${draft.mode.toUpperCase()}**${draft.mode === 'github' && draft.label ? `\nGitHub label: ${escapeMarkdown(draft.label)}` : ''}${draft.url ? `\n<${draft.url}>` : ''}`;
 
 export function preview(draft, history = [], publishingEnabled = true) {
   const buttons = [];

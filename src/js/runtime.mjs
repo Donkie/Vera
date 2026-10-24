@@ -1,11 +1,13 @@
 import { join } from 'node:path';
-import { Workflow, GitHub } from './workflow.mjs';
+import { Workflow, GitHub, text } from './workflow.mjs';
 import { createAnalysis, TranscriptWatcher } from './analysis.mjs';
 import { Review, preview } from './review.mjs';
 
 export async function createWorkflow({ root, client, guildId, textId, env = process.env }) {
   const repo = env.GITHUB_REPO?.trim() || null;
   const githubToken = env.GITHUB_TOKEN?.trim() || null;
+  const label = env.GITHUB_ISSUE_LABEL?.trim() || '';
+  if (label) text(label, 'GITHUB_ISSUE_LABEL', 50);
   const publishingEnabled = Boolean(repo || githubToken);
   const mode = publishingEnabled ? 'github' : 'local';
   const language = env.ISSUE_LANGUAGE || 'English';
@@ -16,8 +18,8 @@ export async function createWorkflow({ root, client, guildId, textId, env = proc
   };
   const editors = legacyIds('DISCORD_CONTROLLER_IDS'), approvers = legacyIds('ISSUE_APPROVER_IDS');
   if (publishingEnabled) {
-    try { await new GitHub(repo, githubToken).checkAccess(); }
-    catch (error) { throw new Error(`GitHub startup check failed: ${error.message}. Set both GITHUB_REPO and GITHUB_TOKEN with Issues read/write access, or leave both unset to disable GitHub.`); }
+    try { await new GitHub(repo, githubToken).checkAccess(label); }
+    catch (error) { throw new Error(`GitHub startup check failed: ${error.message}. Set both GITHUB_REPO and GITHUB_TOKEN with Issues read/write access, or leave both unset to disable GitHub. If set, GITHUB_ISSUE_LABEL must name an existing repository label.`); }
     console.log(`GitHub startup check passed: ${repo}.`);
   } else {
     console.warn('\n' + '!'.repeat(72) + '\nWARNING: GITHUB PUBLISHING IS DISABLED\nGITHUB_REPO and GITHUB_TOKEN are unset. Recording, analysis and draft review\nremain available. GitHub posting controls and duplicate lookup are disabled.\n' + '!'.repeat(72) + '\n');
@@ -70,7 +72,7 @@ export async function createWorkflow({ root, client, guildId, textId, env = proc
     announcing.set(draft.id, pending);
     return pending;
   };
-  const watcher = new TranscriptWatcher({ root, workflow, analyzer, publisherFor, announce, config: { mode, repo, language, sttRun: env.STT_RUN || 'live' } });
+  const watcher = new TranscriptWatcher({ root, workflow, analyzer, publisherFor, announce, config: { mode, repo, language, label, sttRun: env.STT_RUN || 'live' } });
   const review = new Review(workflow, publisherFor, announce, publishingEnabled);
   let timer;
   return {

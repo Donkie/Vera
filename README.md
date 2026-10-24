@@ -73,7 +73,9 @@ Choose one provider:
 
 Set `GITHUB_REPO=owner/repository` and `GITHUB_TOKEN` to a repository-scoped token with **Issues: read and write** access. The repository must be active with Issues enabled. Vera checks access at startup and stops if it fails.
 
-Leave **both** settings blank to disable publishing and duplicate lookup. Those sessions' drafts stay local; start a new recording after enabling GitHub to create publishable drafts.
+Optionally set `GITHUB_ISSUE_LABEL=vera:raw` to mark published issues for later triage with your project's own workflow. Create the label in that repository first and ensure the token's user has access to apply labels. Vera checks that it exists at startup and shows it in Discord review. Leave the setting blank for no label.
+
+Leave **both** `GITHUB_REPO` and `GITHUB_TOKEN` blank to disable publishing and duplicate lookup. Those sessions' drafts stay local; start a new recording after enabling GitHub to create publishable drafts.
 
 ### Other settings
 
@@ -87,7 +89,7 @@ Leave **both** settings blank to disable publishing and duplicate lookup. Those 
 
 For Swedish speech, we recommend [KBLab's KB-Whisper](https://huggingface.co/KBLab/kb-whisper-small), which is the default. For other languages, select a compatible [faster-whisper model](https://github.com/SYSTRAN/faster-whisper#model-conversion) and set `STT_LANGUAGE`; for example, `STT_MODEL=small` and `STT_LANGUAGE=en` for English. Choose a new `STT_RUN` when changing either setting.
 
-Restart after editing `.env`. With Docker, run `docker compose up -d --force-recreate`. Issue language and publishing destination are saved per session; changes apply to new sessions.
+Restart after editing `.env`. With Docker, run `docker compose up -d --force-recreate`. Issue language, publishing destination and label are saved per session; changes apply to new sessions. Existing sessions keep their original label, including no label.
 
 ## Use Vera
 

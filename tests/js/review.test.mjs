@@ -32,6 +32,17 @@ test('preview suppresses mentions and requires full details for long issue appro
   assert.throws(() => details(draft, [], -1), /Invalid detail page/);
 });
 
+test('the saved GitHub label is visible and escaped in both review views', t => {
+  const draft = seedDraft(workflowFor(t));
+  assert.ok(!preview(draft).content.includes('GitHub label:'));
+  draft.label = 'vera:**raw**';
+  for (const view of [preview(draft), details(draft)]) {
+    assert.ok(view.content.includes('GitHub label: vera:\\*\\*raw\\*\\*'));
+    assert.deepEqual(view.allowedMentions, { parse: [] });
+  }
+  assert.ok(!preview({ ...draft, mode: 'local' }).content.includes('GitHub label:'));
+});
+
 test('approval button runs the real workflow against a mocked GitHub publisher', async t => {
   const workflow = workflowFor(t), draft = seedDraft(workflow), github = mockGitHub();
   const announce = mock.fn(async () => {}), review = new Review(workflow, () => github, announce);

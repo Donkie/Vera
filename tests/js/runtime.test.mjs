@@ -1,11 +1,12 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkflow } from '../../src/js/runtime.mjs';
-import { settings, policy, seedDraft, commandFor, githubAccessResponse, startupResponse } from './support/fixtures.mjs';
+import { settings, policy, rows, analysis, seedDraft, commandFor, githubAccessResponse, startupResponse } from './support/fixtures.mjs';
 import { digest } from '../../src/js/workflow.mjs';
+import { writeJson } from '../../src/js/audio.mjs';
 
 test('runtime wires Discord review to mocked GitHub HTTP and updates existing preview messages', async t => {
   const root = mkdtempSync(join(tmpdir(), 'vera-runtime-'));
@@ -57,6 +58,48 @@ test('runtime wires Discord review to mocked GitHub HTTP and updates existing pr
   assert.equal(runtime.workflow.history(draft.id).at(-1).action, 'comment');
 });
 
+test('configured labels flow from new transcripts through Discord approval to GitHub', { timeout: 5000 }, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'vera-labeled-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const directory = join(root, 'session'), run = join(directory, 'recognitions', 'live');
+  mkdirSync(run, { recursive: true });
+  writeJson(join(directory, 'session.json'), { session_id: 'session', status: 'stopped' });
+  writeJson(join(run, 'transcript.json'), rows);
+  const fetcher = t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url.endsWith('/labels/vera%3Araw')) return Response.json({ name: 'vera:raw' });
+    if (url === `https://api.github.com/repos/${settings.repo}/issues?state=all&per_page=100&page=1`) return Response.json([]);
+    if (url === 'http://localhost:11434/api/chat' && JSON.parse(JSON.parse(options.body).messages.at(-1).content).conversation[0].text !== 'Hello.') {
+      return Response.json({ done: true, message: { content: JSON.stringify(analysis()) } });
+    }
+    if (url === `https://api.github.com/repos/${settings.repo}/issues` && options.body !== '{"title":""}') {
+      const payload = JSON.parse(options.body);
+      return Response.json({ ...payload, labels: payload.labels.map(name => ({ name })), html_url: `https://github.com/${settings.repo}/issues/42` });
+    }
+    return startupResponse(url, options);
+  });
+  let announced;
+  const firstPreview = new Promise(resolve => { announced = resolve; });
+  const message = { id: 'preview', guildId: policy.guild, channelId: policy.channel, author: { id: 'bot', bot: true }, edit: async () => message };
+  const channel = { send: async payload => { announced(payload); return message; }, messages: { fetch: async () => message } };
+  const runtime = await createWorkflow({ root, client: { channels: { fetch: async () => channel } }, guildId: policy.guild, textId: policy.channel,
+    env: { LLM_PROVIDER: 'ollama', GITHUB_REPO: settings.repo, GITHUB_TOKEN: 'test-token', GITHUB_ISSUE_LABEL: ' vera:raw ' } });
+  t.after(() => { runtime.stop(); runtime.workflow.close(); });
+  runtime.start();
+  const preview = await firstPreview;
+  await new Promise(setImmediate);
+  assert.match(preview.content, /GitHub label: vera:raw/);
+  assert.equal(runtime.workflow.session('session').label, 'vera:raw');
+  const user = '123456789012345678';
+  runtime.workflow.setAccess({ user, human: true, guild: policy.guild, channel: policy.channel, manageGuild: true }, user, 'publisher');
+  const draft = runtime.workflow.list()[0];
+  await runtime.review.handle({ ...commandFor('', {}, { user, human: true, guild: policy.guild, channel: policy.channel }),
+    isChatInputCommand: () => false, isButton: () => true, customId: `approve:${draft.id}:${draft.revision}:${digest(draft).slice(0, 20)}` });
+  assert.equal(runtime.workflow.get(draft.id).state, 'published');
+  const creations = fetcher.mock.calls.filter(call => call.arguments[0].endsWith('/issues') && call.arguments[1].body !== '{"title":""}');
+  assert.equal(creations.length, 1);
+  assert.deepEqual(JSON.parse(creations[0].arguments[1].body).labels, ['vera:raw']);
+});
+
 for (const code of [10008, 50013]) {
   test(`preview recovery ${code === 10008 ? 'recreates a deleted message' : 'preserves identity on a permission failure'}`, async t => {
     const root = mkdtempSync(join(tmpdir(), 'vera-preview-'));
@@ -82,7 +125,7 @@ for (const code of [10008, 50013]) {
   });
 }
 
-for (const env of [{}, { GITHUB_REPO: ' ', GITHUB_TOKEN: '' }]) {
+for (const env of [{}, { GITHUB_REPO: ' ', GITHUB_TOKEN: '' }, { GITHUB_ISSUE_LABEL: 'vera:raw' }]) {
   test(`missing GitHub settings warn and refresh saved controls without publishing (${JSON.stringify(env)})`, async t => {
     const root = mkdtempSync(join(tmpdir(), 'vera-local-'));
     t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -139,6 +182,20 @@ test('configured GitHub connection failure refuses startup before creating workf
     return true;
   });
   assert.equal(existsSync(join(root, 'workflow.sqlite')), false);
+});
+
+test('invalid or missing configured labels refuse startup before analysis or database creation', async t => {
+  for (const label of ['x'.repeat(51), 'missing']) {
+    const root = mkdtempSync(join(tmpdir(), 'vera-invalid-label-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const fetcher = t.mock.method(globalThis, 'fetch', async (url, options) => url.includes('/labels/')
+      ? new Response('', { status: 404 }) : githubAccessResponse(url, options));
+    await assert.rejects(createWorkflow({ root, client: {}, guildId: policy.guild, textId: policy.channel,
+      env: { GITHUB_REPO: settings.repo, GITHUB_TOKEN: 'test-token', GITHUB_ISSUE_LABEL: label } }), /GITHUB_ISSUE_LABEL/);
+    assert.equal(fetcher.mock.callCount(), label === 'missing' ? 2 : 0);
+    assert.equal(existsSync(join(root, 'workflow.sqlite')), false);
+    fetcher.mock.restore();
+  }
 });
 
 for (const provider of ['ollama', 'claude']) {
