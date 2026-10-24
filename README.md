@@ -66,7 +66,7 @@ Keep tokens and API keys in `.env`, out of source control. See [.env.example](.e
 
 Choose one provider:
 
-- **Claude** (the example configuration): set `LLM_PROVIDER=claude` and `ANTHROPIC_API_KEY`. `ANTHROPIC_MODEL` selects the model. Claude is paid and receives transcript text, speaker details, summaries and issue context; audio stays local. Each startup also makes a small paid check request. Vera has no spending cap.
+- **Claude** (the example configuration): set `LLM_PROVIDER=claude` and `ANTHROPIC_API_KEY`. `ANTHROPIC_MODEL` selects the model. Claude is paid and receives transcript text, speaker details, summaries and topic context; audio stays local. During recording Vera sends 12 new turns at a time, or what has accumulated after two minutes, to limit repeated context. Each startup also makes a small paid check request. Vera has no spending cap.
 - **Ollama**: install [Ollama](https://ollama.com/), run `ollama pull qwen3.5:4b`, and set `LLM_PROVIDER=ollama`. `OLLAMA_MODEL` and `OLLAMA_URL` select the model and server. Text stays on your Ollama server; Vera requests CPU inference, which can take minutes. With Docker, use a server address reachable from the container: `localhost` points to Vera itself.
 
 ### GitHub (optional)
@@ -75,7 +75,7 @@ Set `GITHUB_REPO=owner/repository` and `GITHUB_TOKEN` to a repository-scoped tok
 
 Optionally set `GITHUB_ISSUE_LABEL=vera:raw` to mark published issues for later triage with your project's own workflow. Create the label in that repository first and ensure the token's user has access to apply labels. Vera checks that it exists at startup and shows it in Discord review. Leave the setting blank for no label.
 
-Leave **both** `GITHUB_REPO` and `GITHUB_TOKEN` blank to disable publishing and duplicate lookup. Those sessions' drafts stay local; start a new recording after enabling GitHub to create publishable drafts.
+Leave **both** `GITHUB_REPO` and `GITHUB_TOKEN` blank to disable publishing. Those sessions' drafts stay local; start a new recording after enabling GitHub to create publishable drafts.
 
 ### Other settings
 

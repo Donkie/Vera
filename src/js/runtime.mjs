@@ -22,14 +22,14 @@ export async function createWorkflow({ root, client, guildId, textId, env = proc
     catch (error) { throw new Error(`GitHub startup check failed: ${error.message}. Set both GITHUB_REPO and GITHUB_TOKEN with Issues read/write access, or leave both unset to disable GitHub. If set, GITHUB_ISSUE_LABEL must name an existing repository label.`); }
     console.log(`GitHub startup check passed: ${repo}.`);
   } else {
-    console.warn('\n' + '!'.repeat(72) + '\nWARNING: GITHUB PUBLISHING IS DISABLED\nGITHUB_REPO and GITHUB_TOKEN are unset. Recording, analysis and draft review\nremain available. GitHub posting controls and duplicate lookup are disabled.\n' + '!'.repeat(72) + '\n');
+    console.warn('\n' + '!'.repeat(72) + '\nWARNING: GITHUB PUBLISHING IS DISABLED\nGITHUB_REPO and GITHUB_TOKEN are unset. Recording, analysis and draft review\nremain available. GitHub posting controls are disabled.\n' + '!'.repeat(72) + '\n');
   }
   const analyzer = createAnalysis(env);
   console.log(`Checking analysis model: ${analyzer.label}...`);
   try {
     const result = await analyzer.analyze({ language: 'English', previous_summary: '',
-      conversation: [{ id: 's1', start: 0, end: 1, user_id: 'startup', speaker: 'Startup check', text: 'Hello.' }],
-      new_segment_ids: ['s1'], topics: [], existing_issues: [] });
+      conversation: [{ id: 's1', speaker: 'Startup check', text: 'Hello.' }],
+      new_segment_ids: ['s1'], topics: [] });
     if (!result || typeof result.summary !== 'string' || !result.summary.trim() || !Array.isArray(result.candidates) || result.candidates.length || !Array.isArray(result.withdrawn) || result.withdrawn.length) throw new Error('Model returned an unexpected startup analysis');
   } catch (error) {
     analyzer.close();

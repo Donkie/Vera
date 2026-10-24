@@ -10,7 +10,7 @@ export const candidate = (evidence = ['s1']) => ({ key: 'save-button', title: 'S
   evidence, duplicates: [], evidence_label: 'Original transcript evidence', duplicates_label: 'Possible duplicates' });
 export const analysis = (evidence = ['s1']) => ({ summary: 'A save button problem was reported.', candidates: [candidate(evidence)], withdrawn: [] });
 export const input = () => ({ language: 'English', previous_summary: '', conversation: [{ ...rows[0], id: 's1' }],
-  new_segment_ids: ['s1'], topics: [], existing_issues: [] });
+  new_segment_ids: ['s1'], topics: [] });
 
 export function workflowFor(t, path = ':memory:') {
   const workflow = new Workflow(path, policy);

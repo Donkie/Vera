@@ -214,7 +214,7 @@ for (const provider of ['ollama', 'claude']) {
     const body = JSON.parse(options.body);
     const request = JSON.parse(body.messages.at(-1).content);
     assert.equal(request.conversation[0].text, 'Hello.');
-    assert.deepEqual(request.existing_issues, []);
+    assert.equal(request.existing_issues, undefined);
     assert.deepEqual(runtime.workflow.list(), []);
     assert.ok(options.signal instanceof AbortSignal);
   });
