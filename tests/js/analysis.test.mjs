@@ -9,10 +9,13 @@ import { digest } from '../../src/js/workflow.mjs';
 import { settings, publisher, rows, analysis, input, workflowFor, mockGitHub } from './support/fixtures.mjs';
 
 test('Ollama uses mocked structured responses with CPU-only options and bounded references', async t => {
+  const request = input();
+  request.language = 'German';
+  request.conversation[0].text = 'Le bouton Enregistrer ne fonctionne pas.';
   const fetcher = mock.fn(async () => Response.json({ done: true, done_reason: 'stop', message: { content: JSON.stringify(analysis()) } }));
   const analyzer = new OllamaAnalysis({ fetcher });
   t.after(() => analyzer.close());
-  assert.deepEqual(await analyzer.analyze(input()), analysis());
+  assert.deepEqual(await analyzer.analyze(request), analysis());
   const [url, options] = fetcher.mock.calls[0].arguments, body = JSON.parse(options.body);
   assert.equal(url, 'http://localhost:11434/api/chat');
   assert.equal(body.options.num_gpu, 0);
@@ -20,7 +23,9 @@ test('Ollama uses mocked structured responses with CPU-only options and bounded 
   assert.deepEqual(body.format.properties.candidates.items.properties.evidence.items.enum, ['s1']);
   assert.equal(body.format.properties.candidates.items.properties.duplicates.maxItems, 0);
   assert.equal(body.format.properties.withdrawn.maxItems, 0);
-  assert.deepEqual(JSON.parse(body.messages[1].content), input());
+  assert.match(body.messages[0].content, /in German\./);
+  assert.doesNotMatch(body.messages[0].content, /Swedish/);
+  assert.deepEqual(JSON.parse(body.messages[1].content), request);
 });
 
 test('Ollama rejects HTTP errors, unfinished responses and malformed JSON', async () => {
@@ -37,20 +42,25 @@ test('Ollama rejects HTTP errors, unfinished responses and malformed JSON', asyn
 });
 
 test('Claude parses mocked text blocks and sends the structured output schema', async t => {
+  const request = input();
+  request.language = 'German';
+  request.conversation[0].text = 'Le bouton Enregistrer ne fonctionne pas.';
   const encoded = JSON.stringify(analysis());
   const fetcher = mock.fn(async () => Response.json({ stop_reason: 'end_turn', content: [
     { type: 'text', text: encoded.slice(0, 20) }, { type: 'text', text: encoded.slice(20) },
   ] }));
   const analyzer = new ClaudeAnalysis({ apiKey: 'test-key', fetcher });
   t.after(() => analyzer.close());
-  assert.deepEqual(await analyzer.analyze(input()), analysis());
+  assert.deepEqual(await analyzer.analyze(request), analysis());
   const [url, options] = fetcher.mock.calls[0].arguments, body = JSON.parse(options.body);
   assert.equal(url, 'https://api.anthropic.com/v1/messages');
   assert.equal(options.headers.Authorization, 'Bearer test-key');
   assert.equal(options.redirect, 'error');
   assert.equal(body.output_config.format.type, 'json_schema');
   assert.equal(body.output_config.format.schema.properties.summary.maxLength, undefined);
-  assert.deepEqual(JSON.parse(body.messages[0].content), input());
+  assert.match(body.system, /in German\./);
+  assert.doesNotMatch(body.system, /Swedish/);
+  assert.deepEqual(JSON.parse(body.messages[0].content), request);
 });
 
 test('Claude rejects incomplete, empty and invalid results without exposing provider secrets', async () => {

@@ -154,8 +154,10 @@ class TranscribeTests(unittest.TestCase):
         config = self.recognizer().config
         run = transcribe.prepare_run(self.session, 'live', config)
         self.assertEqual(transcribe.prepare_run(self.session, 'live', config), run)
-        with self.assertRaisesRegex(ValueError, 'another model/settings'):
-            transcribe.prepare_run(self.session, 'live', {**config, 'language': 'en'})
+        for key, value in [('model', 'small'), ('language', 'en')]:
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'another model/settings'):
+                transcribe.prepare_run(self.session, 'live', {**config, key: value})
+        self.assertEqual(json.loads((run / 'run.json').read_text()), config)
         for name in ['../escape', '', 'x' * 65]:
             with self.subTest(name=name), self.assertRaises(ValueError):
                 transcribe.prepare_run(self.session, name, config)
@@ -380,6 +382,7 @@ class TranscribeTests(unittest.TestCase):
         self.utils.download_model.assert_called_once_with('KBLab/kb-whisper-small', cache_dir='models')
         config = json.loads((transcript.parent / 'run.json').read_text())
         self.assertEqual(config['model'], 'KBLab/kb-whisper-small')
+        self.assertEqual(config['language'], 'sv')
         self.assertEqual(config['device'], 'cpu')
         self.assertEqual(config['compute_type'], 'int8')
 
@@ -403,22 +406,31 @@ class TranscribeTests(unittest.TestCase):
         self.utils.download_model.assert_not_called()
         self.whisper.WhisperModel.assert_not_called()
 
-    def test_watch_discovers_sessions_and_skips_completed_chunks_on_later_polls(self):
+    def test_watch_uses_alternative_model_and_language_and_skips_completed_chunks(self):
         saved = self.session / 'saved-session'
         saved.mkdir()
         self.path.rename(saved / self.path.name)
         self.audio.rename(saved / self.audio.name)
         transcribe.write_json(saved / 'session.json', {'status': 'stopped'})
-        arguments = ['transcribe.py', 'watch', '--root', str(self.session), '--run', 'base-comparison',
-                     '--model', 'KBLab/kb-whisper-base']
+        self.model.transcribe.side_effect = lambda *args, **kwargs: (iter([
+            SimpleNamespace(text='The save button is broken.', words=[
+                SimpleNamespace(start=0.1, end=1.5, word=' The save button is broken.')])]), SimpleNamespace(language='en'))
+        arguments = ['transcribe.py', 'watch', '--root', str(self.session), '--run', 'english-small',
+                     '--model', 'small', '--language', 'en']
         with patch.object(sys, 'argv', arguments), patch('src.python.transcribe.os.nice', create=True), \
                 patch('src.python.transcribe.os.umask'), patch('src.python.transcribe.time.sleep', side_effect=[None, KeyboardInterrupt]):
             with self.assertRaises(KeyboardInterrupt):
                 transcribe.main()
-        run = saved / 'recognitions' / 'base-comparison'
-        self.assertEqual(json.loads((run / 'run.json').read_text())['model'], 'KBLab/kb-whisper-base')
-        self.assertEqual(json.loads((run / 'transcript.json').read_text())[0]['speaker'], 'Ada')
+        run = saved / 'recognitions' / 'english-small'
+        config = json.loads((run / 'run.json').read_text())
+        self.assertEqual(config['model'], 'small')
+        self.assertEqual(config['language'], 'en')
+        self.utils.download_model.assert_called_once_with('small', cache_dir='models')
+        self.assertEqual(json.loads((run / 'transcript.json').read_text())[0], {
+            'start': 12.1, 'end': 13.5, 'text': 'The save button is broken.', 'user_id': '123', 'speaker': 'Ada'})
         self.assertEqual(self.model.transcribe.call_count, 3)
+        for call in self.model.transcribe.call_args_list:
+            self.assertEqual(call.kwargs['language'], 'en')
 
     def test_watch_leaves_pending_audio_idle_until_stop_even_when_progress_does_not_change(self):
         saved = self.session / 'saved-session'

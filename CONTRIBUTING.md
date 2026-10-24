@@ -57,10 +57,10 @@ Replay retained audio into a separate run using the production Python environmen
 
 ```bash
 .venv/bin/python src/python/transcribe.py replay --session data/SESSION_ID \
-  --model KBLab/kb-whisper-small --run small-pauses
+  --model KBLab/kb-whisper-small --language sv --run small-pauses
 ```
 
-Replace `SESSION_ID` with a saved session directory. Replay preserves source audio. A run refuses different model/settings; choose a new `--run` name instead. To have the bot analyze that run, set `STT_RUN` and restart. Use `--help` for worker options; other spoken languages require a suitable multilingual model and `--language`. The standard launcher uses Swedish recognition and does not expose that flag.
+Replace `SESSION_ID` with a saved session directory. Replay preserves source audio. A run refuses different model/settings; choose a new `--run` name instead. To have the bot analyze that run, set `STT_RUN` and restart. Use `--help` for worker options. Both watch and replay accept any compatible faster-whisper model and its supported spoken-language code through `--model` and `--language`; the standard launcher forwards `STT_MODEL` and `STT_LANGUAGE`. Defaults remain `KBLab/kb-whisper-small` and `sv`. For example, replay English speech with `--model small --language en --run english-small`. Issue output language is configured separately through `ISSUE_LANGUAGE`.
 
 Failed transcription writes `*.error.json` in the run's `chunks/` directory; fix the cause and remove the affected error file to retry. Analysis failures write `analysis-error.json` in the session and retry after a minute. Back up recordings and the workflow database together, including SQLite WAL/SHM state; restoring an old database can lose publication history.
 

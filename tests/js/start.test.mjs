@@ -20,11 +20,11 @@ function launch(t, env = {}, ready = true) {
 }
 
 test('one launcher starts Python and the bot with shared environment and matching STT settings', async t => {
-  const env = { RECORDINGS_DIR: './custom recordings', STT_RUN: 'small-cpu', STT_MODEL: 'KBLab/kb-whisper-base' };
+  const env = { RECORDINGS_DIR: './custom recordings', STT_RUN: 'english-cpu', STT_MODEL: 'small', STT_LANGUAGE: 'en', ISSUE_LANGUAGE: 'German' };
   const { worker, bot, signals, spawnChild, result } = launch(t, env);
   const [python, args, options] = spawnChild.mock.calls[0].arguments;
   assert.equal(python, resolve('.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'));
-  assert.deepEqual(args, ['src/python/transcribe.py', 'watch', '--root', resolve(env.RECORDINGS_DIR), '--run', 'small-cpu', '--model', env.STT_MODEL]);
+  assert.deepEqual(args, ['src/python/transcribe.py', 'watch', '--root', resolve(env.RECORDINGS_DIR), '--run', 'english-cpu', '--model', env.STT_MODEL, '--language', 'en']);
   assert.equal(options.env, env);
   assert.deepEqual(options.stdio, ['inherit', 'pipe', 'inherit']);
   assert.equal(options.detached, process.platform !== 'win32');

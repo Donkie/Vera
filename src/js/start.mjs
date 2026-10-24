@@ -33,6 +33,7 @@ export function start({ env = process.env, spawnChild = spawn, signals = process
 
     const workerArgs = ['src/python/transcribe.py', 'watch', '--root', resolve(env.RECORDINGS_DIR || 'data'), '--run', env.STT_RUN || 'live'];
     if (env.STT_MODEL) workerArgs.push('--model', env.STT_MODEL);
+    if (env.STT_LANGUAGE) workerArgs.push('--language', env.STT_LANGUAGE);
     const python = resolve('.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
     const launch = (name, executable, args) => {
       const child = spawnChild(executable, args, { env,

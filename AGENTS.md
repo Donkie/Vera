@@ -1,6 +1,6 @@
 # Agent guide
 
-Vera records Discord discussions, transcribes Swedish speech locally, drafts issues with Claude/Ollama and publishes to GitHub after authorized human review. Read [README.md](README.md) for user behavior and [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and implementation details.
+Vera records Discord discussions, transcribes speech locally with a configurable Whisper model and spoken language (KBLab KB-Whisper and Swedish by default), drafts issues with Claude/Ollama and publishes to GitHub after authorized human review. Read [README.md](README.md) for user behavior and [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and implementation details.
 
 ## Find the right code
 

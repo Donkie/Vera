@@ -2,7 +2,7 @@
 
 Vera is a self-hosted Discord assistant that turns voice discussions into GitHub issue drafts. Use it during project meetings to capture bugs, improvements and ideas, then review and publish them in Discord.
 
-It records each speaker separately, transcribes Swedish speech locally, and uses Claude or Ollama to write summaries and drafts in your chosen language. Drafts include original transcript quotes as evidence. An authorized person must approve each issue before it is published. GitHub is optional: recording and draft review work without it.
+It records each speaker separately, transcribes speech locally with a configurable Whisper model and spoken language, and uses Claude or Ollama to write summaries and drafts in your chosen language. Drafts include original transcript quotes as evidence. An authorized person must approve each issue before it is published. GitHub is optional: recording and draft review work without it.
 
 ## Run Vera
 
@@ -75,10 +75,13 @@ Leave **both** settings blank to disable publishing and duplicate lookup. Those 
 
 | Setting | Purpose |
 | --- | --- |
-| `ISSUE_LANGUAGE` | Language for summaries and issue text; defaults to English. Does not change Swedish speech recognition or original quotes. |
+| `ISSUE_LANGUAGE` | Language for summaries and issue text; defaults to English. Independent of the spoken language; original quotes stay unchanged. |
 | `RECORDINGS_DIR` | Storage folder; defaults to `./data`. Docker Compose uses `/app/data` in its persistent volume. |
-| `STT_MODEL` | Optional speech model override; defaults to `KBLab/kb-whisper-small` on CPU. |
+| `STT_MODEL` | Speech model: a faster-whisper model name, CTranslate2 Hugging Face ID or local model directory. Defaults to `KBLab/kb-whisper-small` on CPU. |
+| `STT_LANGUAGE` | Spoken-language code supported by the model, such as `sv`, `en` or `de`; defaults to `sv` (Swedish). |
 | `STT_RUN` | Transcript run name; defaults to `live`. Choose a new name when changing speech model settings to preserve existing transcripts. |
+
+For Swedish speech, we recommend [KBLab's KB-Whisper](https://huggingface.co/KBLab/kb-whisper-small), which is the default. For other languages, select a compatible [faster-whisper model](https://github.com/SYSTRAN/faster-whisper#model-conversion) and set `STT_LANGUAGE`; for example, `STT_MODEL=small` and `STT_LANGUAGE=en` for English. Choose a new `STT_RUN` when changing either setting.
 
 Restart after editing `.env`. With Docker, run `docker compose up -d --force-recreate`. Issue language and publishing destination are saved per session; changes apply to new sessions.
 
