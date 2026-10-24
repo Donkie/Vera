@@ -120,7 +120,7 @@ export class AnalysisRunner {
     if (!session) throw new Error('Open the session before analyzing it');
     const processed = new Set(session.processed);
     const pending = normalized.filter(row => !processed.has(row.id));
-    if (pending.length && (!this.issueCache || this.issueCache.expires < now)) this.issueCache = { expires: now + 60_000, rows: await this.publisher.list() };
+    if (this.publisher && pending.length && (!this.issueCache || this.issueCache.expires < now)) this.issueCache = { expires: now + 60_000, rows: await this.publisher.list() };
     const issues = this.issueCache?.rows ?? [];
     // All titles are included; the context limit fails explicitly instead of hiding duplicate candidates.
     const existing = issues.map(({ number, title }) => ({ number, title }));
@@ -177,7 +177,7 @@ export class TranscriptWatcher {
           const fingerprint = hash({ rows, ended });
           const sessionId = info.session_id || name;
           const saved = this.workflow.session(sessionId);
-          if (saved && saved.mode !== 'github') continue;
+          if (saved && !['github', 'local'].includes(saved.mode)) continue;
           const settings = saved ? { repo: saved.repo, language: saved.language, mode: saved.mode } : this.config;
           this.workflow.openSession(sessionId, settings);
           if (!this.runners.has(sessionId)) this.runners.set(sessionId, new AnalysisRunner(this.workflow, this.analyzer, this.publisherFor(settings.mode, settings.repo)));
@@ -204,11 +204,14 @@ export class TranscriptWatcher {
       this.workflow.settle();
       for (const draft of this.workflow.list()) {
         if (draft.state === 'approved') {
-          try { await this.workflow.publish(draft.id, this.publisherFor(draft.mode, draft.repo)); }
+          try {
+            const publisher = this.publisherFor(draft.mode, draft.repo);
+            if (publisher) await this.workflow.publish(draft.id, publisher);
+          }
           catch { /* State is persisted; uncertain POSTs require read-only reconciliation. */ }
         }
         const current = this.workflow.get(draft.id);
-        if (['ready', 'published', 'uncertain', 'withdrawn', 'merged', 'rejected'].includes(current.state) && current.announced !== `${current.state}:${current.revision}`) {
+        if ((['ready', 'published', 'uncertain', 'withdrawn', 'merged', 'rejected'].includes(current.state) || this.workflow.previewForDraft(current.id)) && current.announced !== `${current.state}:${current.revision}`) {
           const historyLength = this.workflow.history(current.id).length;
           await this.announce(current);
           // A crash between Discord send and this write may repeat a preview, never a GitHub POST.

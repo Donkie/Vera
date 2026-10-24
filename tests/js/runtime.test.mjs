@@ -1,17 +1,19 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkflow } from '../../src/js/runtime.mjs';
-import { settings, policy, seedDraft, commandFor } from './support/fixtures.mjs';
+import { settings, policy, seedDraft, commandFor, githubAccessResponse } from './support/fixtures.mjs';
 import { digest } from '../../src/js/workflow.mjs';
 
 test('runtime wires Discord review to mocked GitHub HTTP and updates existing preview messages', async t => {
   const root = mkdtempSync(join(tmpdir(), 'vera-runtime-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const fetcher = t.mock.method(globalThis, 'fetch', async (_url, options) => Response.json({ ...JSON.parse(options.body),
-    number: 42, html_url: `https://github.com/${settings.repo}/issues/42` }));
+  const fetcher = t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (options.method !== 'POST' || options.body === '{"title":""}') return githubAccessResponse(url, options);
+    return Response.json({ ...JSON.parse(options.body), number: 42, html_url: `https://github.com/${settings.repo}/issues/42` });
+  });
   const message = { id: 'message', guildId: policy.guild, channelId: policy.channel, author: { id: 'bot', bot: true },
     edit: mock.fn(async () => message) };
   const remove = mock.fn(async () => { throw new Error('Missing reaction permissions'); });
@@ -23,9 +25,12 @@ test('runtime wires Discord review to mocked GitHub HTTP and updates existing pr
   ]) };
   const channel = { send: mock.fn(async () => message), messages: { fetch: mock.fn(async () => message) } };
   const client = { channels: { fetch: mock.fn(async () => channel) } };
-  const runtime = createWorkflow({ root, client, guildId: policy.guild, textId: policy.channel, env: {
+  const runtime = await createWorkflow({ root, client, guildId: policy.guild, textId: policy.channel, env: {
     LLM_PROVIDER: 'ollama', GITHUB_REPO: settings.repo, GITHUB_TOKEN: 'mock-token',
   } });
+  assert.equal(runtime.publishingEnabled, true);
+  assert.equal(fetcher.mock.callCount(), 3);
+  fetcher.mock.resetCalls();
   t.after(() => { runtime.stop(); runtime.workflow.close(); });
   const user = '123456789012345678';
   runtime.workflow.setAccess({ user, human: true, guild: policy.guild, channel: policy.channel, manageGuild: true }, user, 'publisher');
@@ -60,7 +65,8 @@ for (const code of [10008, 50013]) {
     const channel = { send: mock.fn(async () => message), messages: { fetch: mock.fn(async () => {
       throw Object.assign(new Error('Discord request failed'), { code });
     }) } };
-    const runtime = createWorkflow({ root, client: { channels: { fetch: async () => channel } }, guildId: policy.guild, textId: policy.channel,
+    t.mock.method(globalThis, 'fetch', githubAccessResponse);
+    const runtime = await createWorkflow({ root, client: { channels: { fetch: async () => channel } }, guildId: policy.guild, textId: policy.channel,
       env: { GITHUB_REPO: settings.repo, GITHUB_TOKEN: 'mock-token', DISCORD_CONTROLLER_IDS: user } });
     t.after(() => { runtime.stop(); runtime.workflow.close(); });
     runtime.workflow.openSession('session', settings);
@@ -74,3 +80,61 @@ for (const code of [10008, 50013]) {
     if (code !== 10008) assert.match(interaction.editReply.mock.calls.at(-1).arguments[0].content, /Discord request failed/);
   });
 }
+
+for (const env of [{}, { GITHUB_REPO: ' ', GITHUB_TOKEN: '' }]) {
+  test(`missing GitHub settings warn and refresh saved controls without publishing (${JSON.stringify(env)})`, async t => {
+    const root = mkdtempSync(join(tmpdir(), 'vera-local-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const warning = t.mock.method(console, 'warn', () => {});
+    t.mock.method(console, 'log', () => {});
+    const fetcher = t.mock.method(globalThis, 'fetch', mock.fn());
+    let edited;
+    const refreshed = new Promise(resolve => { edited = resolve; });
+    const message = { id: 'old-preview', guildId: policy.guild, channelId: policy.channel, author: { bot: true, id: 'bot' },
+      edit: mock.fn(async payload => { edited(payload); return message; }) };
+    const channel = { messages: { fetch: async () => message } };
+    const user = '123456789012345678';
+    const runtime = await createWorkflow({ root, client: { channels: { fetch: async () => channel } },
+      guildId: policy.guild, textId: policy.channel, env: { ...env, DISCORD_CONTROLLER_IDS: user, ISSUE_APPROVER_IDS: user } });
+    t.after(() => { runtime.stop(); runtime.workflow.close(); });
+    assert.equal(runtime.publishingEnabled, false);
+    assert.match(warning.mock.calls[0].arguments[0], /!{72}\nWARNING: GITHUB PUBLISHING IS DISABLED/);
+    runtime.workflow.openSession('session', settings);
+    const draft = seedDraft(runtime.workflow);
+    runtime.workflow.registerPreview(message, draft);
+    runtime.workflow.approve({ user, human: true, guild: policy.guild, channel: policy.channel }, draft.id, draft.revision, digest(draft));
+    runtime.start();
+    const payload = await refreshed;
+    await new Promise(setImmediate);
+    assert.ok(!payload.components[0].toJSON().components.some(button => ['approve', 'reconcile'].includes(button.custom_id.split(':')[0])));
+    assert.equal(runtime.workflow.get(draft.id).state, 'approved');
+    assert.equal(fetcher.mock.callCount(), 0);
+  });
+}
+
+for (const env of [
+  { GITHUB_REPO: settings.repo }, { GITHUB_TOKEN: 'test-token' },
+  { GITHUB_REPO: 'invalid-repo', GITHUB_TOKEN: 'test-token' },
+]) {
+  test(`incomplete or malformed GitHub configuration refuses startup (${Object.keys(env).join(',')})`, async t => {
+    const root = mkdtempSync(join(tmpdir(), 'vera-invalid-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const fetcher = t.mock.method(globalThis, 'fetch', mock.fn());
+    await assert.rejects(createWorkflow({ root, client: {}, guildId: policy.guild, textId: policy.channel, env }), /GitHub startup check failed/);
+    assert.equal(fetcher.mock.callCount(), 0);
+    assert.equal(existsSync(join(root, 'workflow.sqlite')), false);
+  });
+}
+
+test('configured GitHub connection failure refuses startup before creating workflow state', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'vera-unreachable-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('secret-token'); });
+  await assert.rejects(createWorkflow({ root, client: {}, guildId: policy.guild, textId: policy.channel,
+    env: { GITHUB_REPO: settings.repo, GITHUB_TOKEN: 'secret-token' } }), error => {
+    assert.match(error.message, /GitHub startup check failed.*Cannot connect/);
+    assert.ok(!error.message.includes('secret-token'));
+    return true;
+  });
+  assert.equal(existsSync(join(root, 'workflow.sqlite')), false);
+});

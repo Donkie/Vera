@@ -157,6 +157,21 @@ test('watcher waits for final STT chunks, announces once and never auto-approves
   assert.equal(github.create.mock.callCount(), 0);
 });
 
+test('local sessions analyze and settle drafts without a GitHub publisher', async t => {
+  const workflow = workflowFor(t);
+  workflow.openSession('local-session', { repo: null, mode: 'local', language: 'English' });
+  const analyzer = { analyze: mock.fn(async () => analysis()) };
+  const runner = new AnalysisRunner(workflow, analyzer, null);
+  const drafts = await runner.ingest('local-session', rows, { ended: true });
+  assert.deepEqual(analyzer.analyze.mock.calls[0].arguments[0].existing_issues, []);
+  assert.equal(drafts.length, 1);
+  assert.equal(drafts[0].mode, 'local');
+  assert.equal(drafts[0].repo, null);
+  assert.equal(drafts[0].state, 'ready');
+  assert.throws(() => workflow.approve(publisher, drafts[0].id, drafts[0].revision, digest(drafts[0])), /disabled for this draft/);
+  assert.equal(workflow.session('local-session').ended, true);
+});
+
 test('watcher persists failures, backs off and recovers using the same transcript', async t => {
   t.mock.method(console, 'error', () => {});
   const analyzer = { analyze: mock.fn(async () => { throw new Error('Mock model unavailable'); }) };

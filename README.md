@@ -24,7 +24,7 @@ live there; Python requirements live beside the worker in `src/python/`.
 
 - Node.js 24 or newer and Python 3.11.
 - A Discord bot installed in your server.
-- A GitHub repository and a fine-grained token limited to that repository, with Issues read/write permission.
+- Optional for publishing: a GitHub repository and a fine-grained token limited to that repository, with Issues read/write permission.
 - An Anthropic API key, or a local Ollama installation.
 
 The default STT configuration is Swedish KB-Whisper small on CPU with `int8` precision and two inference threads. Small improves Swedish word recognition over base in [KBLab's published benchmarks](https://huggingface.co/KBLab/kb-whisper-small#wer-compared-to-openai), at the cost of more CPU work and RAM. The first run downloads approximately 490 MB of [model and tokenizer files](https://huggingface.co/KBLab/kb-whisper-small/tree/main). Capture, STT and text analysis run independently. Claude requires no local text model; Ollama also defaults to CPU inference so the GPU remains available for other applications.
@@ -40,6 +40,21 @@ chmod 600 .env
 ```
 
 Fill in `.env` locally. Keep API keys and tokens out of source control and chat.
+
+Set both `GITHUB_REPO=owner/repository` and `GITHUB_TOKEN` to enable GitHub. Leave both
+blank or unset to run without GitHub: startup prints a prominent warning, recording,
+analysis and draft review continue, and posting buttons (including in full details)
+and publication lookup controls are hidden. Old posting controls are refused and
+pending approvals cannot publish while GitHub is disabled. Duplicate lookup is skipped.
+Drafts from sessions started without GitHub stay local; start a new recording session
+after configuring GitHub to create publishable drafts.
+
+When either GitHub setting is supplied, startup requires both and checks repository
+availability, issue reading and issue creation access before connecting to Discord.
+The write check sends a blank title, which must fail specifically at issue title
+validation; it never supplies a valid title or creates a test issue.
+Invalid credentials, missing permissions, disabled/archived repositories, connection
+failures and timeouts stop startup with an error. Fix the settings and restart.
 
 For Claude:
 

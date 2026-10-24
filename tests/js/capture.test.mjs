@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { GatewayIntentBits, Routes, SlashCommandBuilder } from 'discord.js';
 import { createWorkflow } from '../../src/js/runtime.mjs';
-import { commandFor } from './support/fixtures.mjs';
+import { commandFor, githubAccessResponse } from './support/fixtures.mjs';
 
 async function botFor(t) {
   const root = mkdtempSync(join(tmpdir(), 'vera-discord-'));
@@ -19,6 +19,7 @@ async function botFor(t) {
   Object.assign(process.env, env);
   t.mock.method(console, 'log', () => {});
   t.mock.method(console, 'error', () => {});
+  t.mock.method(globalThis, 'fetch', githubAccessResponse);
   const exitCode = process.exitCode;
   const signals = Object.fromEntries(['SIGINT', 'SIGTERM'].map(signal => [signal, process.listeners(signal)]));
   let runtime;
@@ -65,7 +66,7 @@ async function botFor(t) {
     delete = mock.fn();
   } });
   t.mock.module(new URL('../../src/js/runtime.mjs', import.meta.url), { namedExports: {
-    createWorkflow: options => { runtime = createWorkflow(options); return runtime; },
+    createWorkflow: async options => { runtime = await createWorkflow(options); return runtime; },
   } });
   await import('../../src/js/capture.mjs');
   const command = async (action, overrides = {}) => {

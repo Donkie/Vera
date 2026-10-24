@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Socket } from 'node:net';
 import { Workflow, GitHub, digest, publication, transcript } from '../../src/js/workflow.mjs';
-import { settings, policy, reviewer, publisher, rows, analysis, workflowFor, seedDraft, mockGitHub } from './support/fixtures.mjs';
+import { settings, policy, reviewer, publisher, rows, analysis, workflowFor, seedDraft, mockGitHub, githubAccessResponse } from './support/fixtures.mjs';
 
 test('unmocked HTTP and TCP connections fail before reaching external services', () => {
   assert.throws(() => fetch('https://api.github.com'), /Network disabled in tests/);
@@ -158,6 +158,44 @@ test('GitHub rejects HTTP errors, malformed listings and missing credentials', a
   const fetcher = mock.fn();
   await assert.rejects(new GitHub(settings.repo, '', fetcher).list(), /Configure/);
   assert.equal(fetcher.mock.callCount(), 0);
+});
+
+test('GitHub startup checks repository, issue reading, and write access without a valid issue payload', async () => {
+  const fetcher = mock.fn(githubAccessResponse);
+  await new GitHub(settings.repo, 'test-token', fetcher).checkAccess();
+  assert.equal(fetcher.mock.callCount(), 3);
+  const [url, options] = fetcher.mock.calls[2].arguments;
+  assert.equal(url, `https://api.github.com/repos/${settings.repo}/issues`);
+  assert.equal(options.method, 'POST');
+  assert.deepEqual(JSON.parse(options.body), { title: '' });
+  assert.ok(options.signal instanceof AbortSignal);
+});
+
+for (const status of [401, 403, 404, 410, 429, 500]) {
+  test(`GitHub startup refuses HTTP ${status} during read or write checks`, async () => {
+    for (const failAt of [0, 1, 2]) {
+      let calls = 0;
+      const fetcher = async (url, options) => calls++ === failAt ? new Response('', { status }) : githubAccessResponse(url, options);
+      await assert.rejects(new GitHub(settings.repo, 'test-token', fetcher).checkAccess(), new RegExp(`HTTP ${status}`));
+      assert.equal(calls, failAt + 1);
+    }
+  });
+}
+
+test('GitHub startup rejects unavailable repositories and ambiguous validation results', async () => {
+  for (const repo of [{ has_issues: false }, { has_issues: true, archived: true }, { has_issues: true, disabled: true }]) {
+    await assert.rejects(new GitHub(settings.repo, 'test-token', async () => Response.json(repo)).checkAccess(), /active with Issues enabled/);
+  }
+  for (const errors of [undefined, [], [{ resource: 'Issue', field: 'title', code: 'custom' }], [{ resource: 'Issue', field: 'body', code: 'missing_field' }]]) {
+    const fetcher = async (url, options) => options.method === 'POST' ? Response.json({ errors }, { status: 422 }) : githubAccessResponse(url, options);
+    await assert.rejects(new GitHub(settings.repo, 'test-token', fetcher).checkAccess(), /write access could not be verified/);
+  }
+  const malformed = async (url, options) => url.includes('per_page=1') ? Response.json({}) : githubAccessResponse(url, options);
+  await assert.rejects(new GitHub(settings.repo, 'test-token', malformed).checkAccess(), /Invalid GitHub issue list/);
+  const unexpectedSuccess = async (url, options) => options.method === 'POST' ? Response.json({}) : githubAccessResponse(url, options);
+  await assert.rejects(new GitHub(settings.repo, 'test-token', unexpectedSuccess).checkAccess(), /HTTP 200/);
+  const timeout = async () => { throw new DOMException('Timed out', 'TimeoutError'); };
+  await assert.rejects(new GitHub(settings.repo, 'test-token', timeout).checkAccess(), /network error or timeout/);
 });
 
 test('human evidence exclusions and duplicate selections survive later model analysis', t => {

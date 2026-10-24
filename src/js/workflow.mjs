@@ -85,7 +85,7 @@ export class Workflow {
   session(id) { const row = this.db.prepare('SELECT data FROM sessions WHERE id=?').get(id); return row ? JSON.parse(row.data) : null; }
   saveSession(session) { this.db.prepare('INSERT OR REPLACE INTO sessions VALUES (?,?)').run(session.id, JSON.stringify(session)); }
   openSession(id, { repo, language, mode }) {
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || mode !== 'github') throw new Error('Configure a valid repository and publish mode');
+    if (!(mode === 'local' && repo === null) && !(mode === 'github' && /^[\w.-]+\/[\w.-]+$/.test(repo))) throw new Error('Configure a valid repository and publish mode');
     const previous = this.session(id);
     if (previous) {
       if (previous.repo !== repo || previous.language !== language || previous.mode !== mode) throw new Error('Session configuration changed; use a new session ID to avoid changing previously reviewed content');
@@ -102,7 +102,7 @@ export class Workflow {
   }
   list(sessionId) {
     const rows = sessionId ? this.db.prepare('SELECT data FROM drafts WHERE session_id=? ORDER BY rowid').all(sessionId) : this.db.prepare('SELECT data FROM drafts ORDER BY rowid').all();
-    return rows.map(row => JSON.parse(row.data)).filter(draft => draft.mode === 'github');
+    return rows.map(row => JSON.parse(row.data)).filter(draft => ['github', 'local'].includes(draft.mode));
   }
   save(draft) { this.db.prepare('INSERT OR REPLACE INTO drafts VALUES (?,?,?,?)').run(draft.id, draft.session_id, draft.topic, JSON.stringify(draft)); }
   event(draftId, action, user, detail) { this.db.prepare('INSERT INTO events(draft_id,data) VALUES (?,?)').run(draftId, JSON.stringify({ at: new Date().toISOString(), action, user, detail })); }
@@ -234,6 +234,7 @@ export class Workflow {
     this.authorize(context, true);
     return this.transaction(() => {
       const draft = this.get(id);
+      if (draft.mode !== 'github') throw new Error('GitHub publishing is disabled for this draft');
       if (draft.revision !== revision || digest(draft) !== expectedHash) throw new Error('That preview is stale; reopen the draft and approve the current content');
       if (['approved', 'publishing', 'uncertain', 'published'].includes(draft.state)) return draft;
       if (draft.state !== 'ready') throw new Error('Only a settled, unrejected draft can be approved');
@@ -281,24 +282,35 @@ export class Workflow {
 
 export class GitHub {
   constructor(repo, token, fetcher = fetch) { this.repo = repo; this.token = token; this.fetcher = fetcher; this.mode = 'github'; }
-  async request(suffix, payload) {
+  async request(path, payload, expectedStatus) {
     if (!/^[\w.-]+\/[\w.-]+$/.test(this.repo) || !this.token) throw new Error('Configure GITHUB_REPO and a repository-scoped GITHUB_TOKEN');
-    const response = await this.fetcher(`https://api.github.com/repos/${this.repo}/issues${suffix}`, {
-      method: payload ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(20_000),
-      headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
-      ...(payload ? { body: JSON.stringify(payload) } : {}),
-    });
-    if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}`);
+    let response;
+    try {
+      response = await this.fetcher(`https://api.github.com/repos/${this.repo}${path}`, {
+        method: payload ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(20_000),
+        headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
+        ...(payload ? { body: JSON.stringify(payload) } : {}),
+      });
+    } catch { throw new Error('Cannot connect to GitHub (network error or timeout)'); }
+    if (expectedStatus ? response.status !== expectedStatus : !response.ok) throw new Error(`GitHub returned HTTP ${response.status}`);
     return response.json();
+  }
+  async checkAccess() {
+    const repo = await this.request('');
+    if (!repo.has_issues || repo.archived || repo.disabled) throw new Error('GitHub repository must be active with Issues enabled');
+    if (!Array.isArray(await this.request('/issues?state=all&per_page=1'))) throw new Error('Invalid GitHub issue list');
+    // A blank title reaches issue validation but cannot create an issue.
+    const validation = await this.request('/issues', { title: '' }, 422);
+    if (!Array.isArray(validation.errors) || validation.errors.length !== 1 || validation.errors[0].resource !== 'Issue' || validation.errors[0].field !== 'title' || validation.errors[0].code !== 'missing_field') throw new Error('GitHub issue write access could not be verified');
   }
   async list() {
     const issues = [];
     for (let page = 1; ; page++) {
-      const rows = await this.request(`?state=all&per_page=100&page=${page}`);
+      const rows = await this.request(`/issues?state=all&per_page=100&page=${page}`);
       if (!Array.isArray(rows)) throw new Error('Invalid GitHub issue list');
       issues.push(...rows.filter(row => !row.pull_request));
       if (rows.length < 100) return issues;
     }
   }
-  async create(payload) { return this.request('', payload); }
+  async create(payload) { return this.request('/issues', payload); }
 }

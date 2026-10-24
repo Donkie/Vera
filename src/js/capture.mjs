@@ -22,7 +22,7 @@ const textId = snowflake('DISCORD_TEXT_CHANNEL_ID');
 const root = resolve(process.env.RECORDINGS_DIR || 'data');
 mkdirSync(root, { recursive: true, mode: 0o700 });
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates], allowedMentions: { parse: [] } });
-const issues = createWorkflow({ root, client, guildId, textId });
+const issues = await createWorkflow({ root, client, guildId, textId });
 let active;
 let starting = false;
 
@@ -123,7 +123,7 @@ async function start() {
 client.once('clientReady', async () => {
   const command = new SlashCommandBuilder().setName('vera').setDescription('Control the discussion recorder');
   for (const action of ['start', 'stop', 'status']) command.addSubcommand(sub => sub.setName(action).setDescription(`${action} recording`));
-  addReviewCommands(command);
+  addReviewCommands(command, issues.publishingEnabled);
   try {
     await new REST().setToken(token).put(Routes.applicationGuildCommands(client.user.id, guildId), { body: [command.toJSON()] });
     console.log(generateDependencyReport());

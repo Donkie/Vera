@@ -3,10 +3,11 @@ import { Workflow, GitHub } from './workflow.mjs';
 import { createAnalysis, TranscriptWatcher } from './analysis.mjs';
 import { Review, preview } from './review.mjs';
 
-export function createWorkflow({ root, client, guildId, textId, env = process.env }) {
-  const analyzer = createAnalysis(env);
-  const mode = 'github';
-  const repo = env.GITHUB_REPO;
+export async function createWorkflow({ root, client, guildId, textId, env = process.env }) {
+  const repo = env.GITHUB_REPO?.trim() || null;
+  const githubToken = env.GITHUB_TOKEN?.trim() || null;
+  const publishingEnabled = Boolean(repo || githubToken);
+  const mode = publishingEnabled ? 'github' : 'local';
   const language = env.ISSUE_LANGUAGE || 'English';
   const legacyIds = key => {
     const ids = (env[key] || '').split(',').map(s => s.trim()).filter(s => s && s !== 'replace_me');
@@ -14,13 +15,20 @@ export function createWorkflow({ root, client, guildId, textId, env = process.en
     return ids;
   };
   const editors = legacyIds('DISCORD_CONTROLLER_IDS'), approvers = legacyIds('ISSUE_APPROVER_IDS');
-  if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo) || !env.GITHUB_TOKEN) throw new Error('Configure GITHUB_REPO and GITHUB_TOKEN; grant publishing access with /vera access');
+  if (publishingEnabled) {
+    try { await new GitHub(repo, githubToken).checkAccess(); }
+    catch (error) { throw new Error(`GitHub startup check failed: ${error.message}. Set both GITHUB_REPO and GITHUB_TOKEN with Issues read/write access, or leave both unset to disable GitHub.`); }
+  } else {
+    console.warn('\n' + '!'.repeat(72) + '\nWARNING: GITHUB PUBLISHING IS DISABLED\nGITHUB_REPO and GITHUB_TOKEN are unset. Recording, analysis and draft review\nremain available. GitHub posting controls and duplicate lookup are disabled.\n' + '!'.repeat(72) + '\n');
+  }
+  const analyzer = createAnalysis(env);
   const workflow = new Workflow(join(root, 'workflow.sqlite'), { editors, approvers, guild: guildId, channel: textId, mode });
   const publishers = new Map();
   const publisherFor = (publishMode, repository) => {
+    if (!publishingEnabled || publishMode === 'local') return null;
     const key = `${publishMode}:${repository}`;
     if (publishMode !== 'github') throw new Error('This session uses an unsupported publishing destination; start a new session');
-    if (!publishers.has(key)) publishers.set(key, new GitHub(repository, env.GITHUB_TOKEN));
+    if (!publishers.has(key)) publishers.set(key, new GitHub(repository, githubToken));
     return publishers.get(key);
   };
   const announcing = new Map();
@@ -36,7 +44,7 @@ export function createWorkflow({ root, client, guildId, textId, env = process.en
       }
       const current = workflow.get(draft.id);
       const history = workflow.history(current.id);
-      const payload = preview(current, history);
+      const payload = preview(current, history, publishingEnabled);
       message = message ? await message.edit({ ...payload, attachments: [] }) : await channel.send(payload);
       workflow.registerPreview(message, current);
       const latest = workflow.get(current.id);
@@ -51,12 +59,12 @@ export function createWorkflow({ root, client, guildId, textId, env = process.en
     return pending;
   };
   const watcher = new TranscriptWatcher({ root, workflow, analyzer, publisherFor, announce, config: { mode, repo, language, sttRun: env.STT_RUN || 'live' } });
-  const review = new Review(workflow, publisherFor, announce);
+  const review = new Review(workflow, publisherFor, announce, publishingEnabled);
   let timer;
   return {
-    workflow, review,
+    workflow, review, publishingEnabled,
     start() {
-      console.log(`Issue workflow: ${mode.toUpperCase()} destination ${repo}; language ${language}; ${workflow.access().approvers.length} publishers. Manage access with /vera access. Analysis uses ${analyzer.label}.`);
+      console.log(`Issue workflow: ${mode.toUpperCase()} destination ${repo || 'none'}; language ${language}; ${workflow.access().approvers.length} publishers. Manage access with /vera access. Analysis uses ${analyzer.label}.`);
       for (const draft of workflow.list()) if (workflow.previewForDraft(draft.id)) { draft.announced = null; workflow.save(draft); }
       const tick = () => watcher.tick().catch(error => console.error(`Workflow: ${error.message}`));
       void tick(); timer = setInterval(tick, 5000);

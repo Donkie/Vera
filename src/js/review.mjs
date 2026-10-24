@@ -9,18 +9,18 @@ const button = (action, draft, label, style = ButtonStyle.Secondary, suffix = ''
   .setCustomId(`${action}:${token(draft)}${suffix}`).setLabel(label).setStyle(style);
 const approveButton = (draft, reviewed = false) => button('approve', draft, 'Post issue', ButtonStyle.Success, reviewed ? ':reviewed' : '')
   .setDisabled(!reviewed && draft.body.length > 3500);
-const heading = draft => `Draft \`${draft.id}\` · **${draft.state}** · r${draft.revision} · ${draft.repo} · ${draft.language} · **${draft.mode.toUpperCase()}**${draft.url ? `\n<${draft.url}>` : ''}`;
+const heading = draft => `Draft \`${draft.id}\` · **${draft.state}** · r${draft.revision} · ${draft.repo || 'No repository'} · ${draft.language} · **${draft.mode.toUpperCase()}**${draft.url ? `\n<${draft.url}>` : ''}`;
 
-export function preview(draft, history = []) {
+export function preview(draft, history = [], publishingEnabled = true) {
   const buttons = [];
-  if (draft.state === 'ready') buttons.push(approveButton(draft));
+  if (publishingEnabled && draft.mode === 'github' && draft.state === 'ready') buttons.push(approveButton(draft));
   if (mutable.includes(draft.state)) buttons.push(button('edit', draft, 'Edit'));
   buttons.push(button('note', draft, 'Comment'));
   if (['ready', 'settling', 'approved'].includes(draft.state)) buttons.push(button('reject', draft, 'Reject', ButtonStyle.Danger));
-  if (['publishing', 'uncertain'].includes(draft.state)) buttons.push(button('reconcile', draft, 'Check publication'));
+  if (publishingEnabled && draft.mode === 'github' && ['publishing', 'uncertain'].includes(draft.state)) buttons.push(button('reconcile', draft, 'Check publication'));
   buttons.push(button('details', draft, 'Details & history', ButtonStyle.Secondary, ':0'));
   return {
-    content: heading(draft) + (draft.body.length > 3500 ? '\nOpen Details to read the full issue before approving.' : ''),
+    content: heading(draft) + (draft.body.length > 3500 ? '\nOpen Details to read the full issue.' : ''),
     embeds: [{ title: draft.title, description: draft.body.slice(0, 3500), footer: { text: `Revision ${draft.revision} · ${history.filter(e => e.action === 'comment').length} comments` } }],
     components: [new ActionRowBuilder().addComponents(buttons)], allowedMentions: { parse: [] },
   };
@@ -37,20 +37,20 @@ function pages(value) {
   result.push(value || 'No content.');
   return result;
 }
-export function details(draft, history = [], page = 0) {
+export function details(draft, history = [], page = 0, publishingEnabled = true) {
   const bodyPages = pages(draft.body);
   const entries = history.map(e => `${e.at} · ${e.user} · ${e.action}${typeof e.detail === 'string' ? `\n${e.detail}` : e.detail?.revision ? ` · revision ${e.detail.revision}` : ''}`);
   const all = [...bodyPages.map(text => ({ text, section: 'Full issue' })), ...pages(entries.join('\n\n') || 'No review history yet.').map(text => ({ text, section: 'Review history' }))];
   if (!Number.isSafeInteger(page) || page < 0 || page >= all.length) throw new Error('Invalid detail page');
   const buttons = [button('details', draft, 'Previous', ButtonStyle.Secondary, `:${page - 1}`).setDisabled(page === 0),
     button('details', draft, 'Next', ButtonStyle.Secondary, `:${page + 1}`).setDisabled(page === all.length - 1)];
-  if (draft.state === 'ready' && page === bodyPages.length - 1) buttons.push(approveButton(draft, true));
+  if (publishingEnabled && draft.mode === 'github' && draft.state === 'ready' && page === bodyPages.length - 1) buttons.push(approveButton(draft, true));
   return { content: heading(draft), embeds: [{ title: draft.title, description: all[page].text,
     footer: { text: `${all[page].section} · page ${page + 1}/${all.length} · revision ${draft.revision}` } }],
     components: [new ActionRowBuilder().addComponents(buttons)], allowedMentions: { parse: [] } };
 }
 
-export function addReviewCommands(command) {
+export function addReviewCommands(command, publishingEnabled = true) {
   command.addSubcommand(s => s.setName('access').setDescription('Check your access; Manage Server members can grant or revoke it')
     .addUserOption(o => o.setName('user').setDescription('Person whose Vera access to check or change'))
     .addStringOption(o => o.setName('role').setDescription('Access to grant; none revokes access').addChoices(
@@ -62,13 +62,13 @@ export function addReviewCommands(command) {
   command.addSubcommand(s => s.setName('note').setDescription('Comment on a draft (not automatically published)').addStringOption(o => o.setName('id').setDescription('Draft ID').setRequired(true)).addStringOption(o => o.setName('text').setDescription('Developer comment').setMaxLength(2000).setRequired(true)));
   command.addSubcommand(s => s.setName('merge').setDescription('Combine two drafts and require a fresh approval').addStringOption(o => o.setName('keep').setDescription('Draft ID to keep').setRequired(true)).addStringOption(o => o.setName('remove').setDescription('Draft ID to merge into it').setRequired(true)));
   command.addSubcommand(s => s.setName('reject').setDescription('Reject a draft without creating an issue').addStringOption(o => o.setName('id').setDescription('Draft ID').setRequired(true)));
-  command.addSubcommand(s => s.setName('reconcile').setDescription('Look up an uncertain publication; never retries issue creation').addStringOption(o => o.setName('id').setDescription('Draft ID').setRequired(true)));
+  if (publishingEnabled) command.addSubcommand(s => s.setName('reconcile').setDescription('Look up an uncertain publication; never retries issue creation').addStringOption(o => o.setName('id').setDescription('Draft ID').setRequired(true)));
   command.addSubcommand(s => s.setName('summary').setDescription('Read a session summary').addStringOption(o => o.setName('session').setDescription('Session ID').setRequired(true)));
   return command;
 }
 
 export class Review {
-  constructor(workflow, publisherFor, announce) { Object.assign(this, { workflow, publisherFor, announce }); }
+  constructor(workflow, publisherFor, announce, publishingEnabled = true) { Object.assign(this, { workflow, publisherFor, announce, publishingEnabled }); }
   async handle(interaction) {
     const buttonAction = interaction.isButton() ? interaction.customId.split(':')[0] : null;
     const modalAction = interaction.isModalSubmit() ? interaction.customId.split(':')[0] : null;
@@ -79,6 +79,7 @@ export class Review {
     let deferred = false;
     try {
       const context = contextFor(interaction);
+      if (!this.publishingEnabled && (['approve', 'reconcile'].includes(buttonAction) || action === 'reconcile')) throw new Error('GitHub publishing is disabled; configure GITHUB_REPO and GITHUB_TOKEN and restart Vera');
       if (action === 'access') {
         this.workflow.authorizeChannel(context);
         const target = interaction.options.getUser('user') || interaction.user;
@@ -119,7 +120,7 @@ export class Review {
       deferred = true;
       if (buttonAction === 'details') {
         const page = Number(interaction.customId.split(':')[4] || 0);
-        await interaction.editReply(details(draft, this.workflow.history(draft.id), page));
+        await interaction.editReply(details(draft, this.workflow.history(draft.id), page, this.publishingEnabled));
       } else if (buttonAction === 'approve') {
         if (draft.body.length > 3500 && interaction.customId.split(':')[4] !== 'reviewed') throw new Error('Read the full issue in Details before approving');
         this.workflow.approve(context, draft.id, draft.revision, digest(draft));
@@ -166,7 +167,7 @@ export class Review {
           await this.workflow.publish(id, this.publisherFor(current.mode, current.repo));
         }
         const current = this.workflow.get(id);
-        await interaction.editReply(action === 'draft' ? preview(current, this.workflow.history(id)) : { content: `Draft ${current.state}.`, components: [], embeds: [] });
+        await interaction.editReply(action === 'draft' ? preview(current, this.workflow.history(id), this.publishingEnabled) : { content: `Draft ${current.state}.`, components: [], embeds: [] });
         if (action !== 'draft') await this.announce(current);
       }
     } catch (error) {

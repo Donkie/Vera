@@ -1,7 +1,7 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { PermissionFlagsBits } from 'discord.js';
-import { Review, preview, details, contextFor } from '../../src/js/review.mjs';
+import { PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
+import { Review, preview, details, contextFor, addReviewCommands } from '../../src/js/review.mjs';
 import { digest, transcript, publication } from '../../src/js/workflow.mjs';
 import { publisher, reviewer, rows, analysis, candidate, commandFor, workflowFor, seedDraft, mockGitHub } from './support/fixtures.mjs';
 
@@ -41,6 +41,37 @@ test('approval button runs the real workflow against a mocked GitHub publisher',
   assert.equal(github.create.mock.callCount(), 1);
   assert.match(interaction.editReply.mock.calls[0].arguments[0].content, /GitHub issue:/);
   assert.equal(announce.mock.callCount(), 1);
+});
+
+test('disabled GitHub hides posting controls on cards and details, and rejects old controls', async t => {
+  const workflow = workflowFor(t), draft = seedDraft(workflow), github = mockGitHub();
+  const review = new Review(workflow, () => github, async () => {}, false);
+  const actions = payload => payload.components.flatMap(row => row.toJSON().components).map(b => b.custom_id.split(':')[0]);
+  for (const state of ['ready', 'uncertain']) {
+    assert.ok(!actions(preview({ ...draft, state }, [], false)).some(action => ['approve', 'reconcile'].includes(action)));
+  }
+  assert.ok(!actions(details(draft, [], 0, false)).includes('approve'));
+  assert.ok(!actions(preview({ ...draft, repo: null, mode: 'local' })).includes('approve'));
+  assert.ok(!actions(details({ ...draft, repo: null, mode: 'local' })).includes('approve'));
+  const commands = addReviewCommands(new SlashCommandBuilder(), false).options.map(option => option.name);
+  assert.ok(!commands.includes('reconcile'));
+  for (const action of ['approve', 'reconcile']) {
+    const old = interactionFor(draft, { action });
+    await review.handle(old);
+    assert.match(old.reply.mock.calls[0].arguments[0].content, /GitHub publishing is disabled/);
+  }
+  const reconcile = commandFor('reconcile', { id: draft.id }, publisher);
+  await review.handle(reconcile);
+  assert.match(reconcile.reply.mock.calls[0].arguments[0].content, /GitHub publishing is disabled/);
+  const open = commandFor('draft', { id: draft.id });
+  await review.handle(open);
+  assert.ok(!actions(open.editReply.mock.calls[0].arguments[0]).includes('approve'));
+  const full = { ...interactionFor(draft, { context: reviewer, action: 'details' }), message: { flags: { has: () => false } } };
+  await review.handle(full);
+  assert.ok(!actions(full.editReply.mock.calls[0].arguments[0]).includes('approve'));
+  assert.equal(github.create.mock.callCount(), 0);
+  assert.equal(github.list.mock.callCount(), 0);
+  assert.equal(workflow.get(draft.id).state, 'ready');
 });
 
 test('review refuses unauthorized and stale approval buttons before posting', async t => {

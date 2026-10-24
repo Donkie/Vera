@@ -31,6 +31,13 @@ export function mockGitHub() {
     html_url: `https://github.com/${settings.repo}/issues/42` })) };
 }
 
+export function githubAccessResponse(url, options) {
+  if (url === `https://api.github.com/repos/${settings.repo}` && options.method === 'GET') return Response.json({ has_issues: true, archived: false, disabled: false });
+  if (url.endsWith('/issues?state=all&per_page=1') && options.method === 'GET') return Response.json([]);
+  if (url.endsWith('/issues') && options.method === 'POST' && options.body === '{"title":""}') return Response.json({ errors: [{ resource: 'Issue', field: 'title', code: 'missing_field' }] }, { status: 422 });
+  throw new Error('Unexpected GitHub access request');
+}
+
 export function commandFor(action, values = {}, context = reviewer) {
   return { user: { id: context.user, bot: !context.human }, guildId: context.guild, channelId: context.channel,
     memberPermissions: { has: () => context.manageGuild === true }, commandName: 'vera',
