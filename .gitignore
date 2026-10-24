@@ -29,12 +29,6 @@ transcript.json
 transcript.md
 session.json
 events.jsonl
-fixtures/
-tests/
-test/
-*.test.mjs
-test_*.py
-mock-*
 demo.mjs
 benchmarks/
 *-measurement.json

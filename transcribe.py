@@ -127,7 +127,7 @@ def main():
     parser.add_argument('--root', type=Path, default=Path('data'))
     parser.add_argument('--session', type=Path, help='Saved session directory for replay')
     parser.add_argument('--run', default='live', help='Separate transcript/metrics label; never mixes settings')
-    parser.add_argument('--model', default='KBLab/kb-whisper-base')
+    parser.add_argument('--model', default='KBLab/kb-whisper-small')
     parser.add_argument('--language', default='sv', help='Whisper language code; use a multilingual model for other languages')
     parser.add_argument('--device', choices=['cpu', 'cuda'], default='cpu')
     parser.add_argument('--compute-type')

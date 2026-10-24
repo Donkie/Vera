@@ -11,7 +11,7 @@ It records voice separately for each speaker, transcribes locally, and uses Clau
 - A GitHub repository and a fine-grained token limited to that repository, with Issues read/write permission.
 - An Anthropic API key, or a local Ollama installation.
 
-The default STT configuration is Swedish KB-Whisper base on CPU with `int8` precision and two inference threads. Capture, STT and text analysis run independently. Claude requires no local text model; Ollama also defaults to CPU inference so the GPU remains available for other applications.
+The default STT configuration is Swedish KB-Whisper small on CPU with `int8` precision and two inference threads. Small improves Swedish word recognition over base in [KBLab's published benchmarks](https://huggingface.co/KBLab/kb-whisper-small#wer-compared-to-openai), at the cost of more CPU work and RAM. The first run downloads approximately 490 MB of [model and tokenizer files](https://huggingface.co/KBLab/kb-whisper-small/tree/main). Capture, STT and text analysis run independently. Claude requires no local text model; Ollama also defaults to CPU inference so the GPU remains available for other applications.
 
 ## Installation
 
@@ -47,15 +47,24 @@ For local text processing, set `LLM_PROVIDER=ollama`, install [Ollama](https://d
 3. Enable Developer Mode in Discord, copy your server, voice-channel and review-channel IDs, and set them in `.env`. Check channel permission overrides.
 4. Use a dedicated bot application: startup replaces that application's existing server commands with Vera's commands.
 
-Start the STT worker and bot in separate terminals:
-
-```bash
-.venv/bin/python transcribe.py watch
-```
+Start Vera:
 
 ```bash
 npm start
 ```
+
+This starts the local transcription worker and Discord bot together, using `.venv`'s
+Python and the settings in `.env`. `RECORDINGS_DIR` and `STT_RUN` apply to both
+processes. Ctrl+C stops both; the bot saves its final audio before the worker stops.
+Any unfinished transcription jobs resume on the next start. If either process fails,
+Vera stops the other and exits with an error.
+
+If you already have base-model transcripts under the `live` run, stop Vera,
+set `STT_RUN=small-cpu` in `.env`, then run `npm start` again.
+This creates separate small-model transcripts, including for retained sessions;
+existing recordings and base transcripts are preserved. Reusing `live` with changed
+model settings fails deliberately. To keep using base instead, set
+`STT_MODEL=KBLab/kb-whisper-base` in `.env`.
 
 In the configured review channel, a person with **Manage Server** permission grants access with `/vera access user:@person role:publisher`. Reviewer access permits recording and draft review; Publisher also permits issue creation. `/vera access` shows your access, and `role:none` revokes it. Grants persist across restarts. Revocation cancels approvals whose publication has not started; it cannot undo an in-flight or completed GitHub request.
 
@@ -80,14 +89,34 @@ Each topic settles about one minute after its latest newly analyzed relevant evi
 
 Recordings are retained until you delete them. Budget roughly 0.7 GB per recorded speaker-hour. Restrict access and agree on retention with participants. Back up the database with the recordings; restoring an old database can lose publication state.
 
-Replay retained audio with another model and a new run name:
+Replay retained audio with small in a separate run (including recordings originally transcribed with base):
 
 ```bash
 .venv/bin/python transcribe.py replay --session data/SESSION_ID \
-  --model KBLab/kb-whisper-small --run alternative-cpu
+  --model KBLab/kb-whisper-small --run small-cpu
 ```
 
 Runs never overwrite source audio. Changing settings under an existing run name fails to prevent mixed results. Failed chunks produce `.error.json` files; fix the cause and remove the affected error file to retry. Use one worker per run. Other spoken languages require a suitable multilingual model and `--language` setting. To analyze a different run, set `STT_RUN` and restart the bot.
+
+## Tests
+
+Run the same checks as GitHub Actions with Node.js 24+ and Python 3.11+:
+
+```bash
+npm ci
+npm test
+npm run test:python
+```
+
+The tests use Node's built-in test runner and Python's standard-library `unittest`.
+Whisper model loading/downloads, ONNX Runtime, process metrics, Claude/Ollama responses,
+GitHub issue listing/creation and Discord interactions are mocked. No Python packages,
+model weights, running model servers, Discord login or API credentials are required.
+Test network guards reject unmocked connections. Audio files and SQLite databases use
+temporary directories; the real data directory is never used.
+
+The workflow in `.github/workflows/tests.yml` runs both suites on pushes and pull requests.
+It installs only npm dependencies, with Hugging Face offline flags as an extra safeguard.
 
 ## Current limits
 

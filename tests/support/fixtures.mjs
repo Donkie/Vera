@@ -1,0 +1,32 @@
+import { mock } from 'node:test';
+import { Workflow, transcript } from '../../workflow.mjs';
+
+export const settings = { repo: 'example/project', mode: 'github', language: 'English' };
+export const reviewer = { user: 'reviewer', human: true, guild: 'guild', channel: 'review' };
+export const publisher = { ...reviewer, user: 'publisher' };
+export const policy = { guild: 'guild', channel: 'review', editors: [reviewer.user], approvers: [publisher.user] };
+export const rows = [{ start: 0, end: 2, user_id: '123', speaker: 'Ada', text: 'Spara-knappen fungerar inte.' }];
+export const candidate = (evidence = ['s1']) => ({ key: 'save-button', title: 'Save button fails', description: 'The save button does not work.',
+  evidence, duplicates: [], evidence_label: 'Original transcript evidence', duplicates_label: 'Possible duplicates' });
+export const analysis = (evidence = ['s1']) => ({ summary: 'A save button problem was reported.', candidates: [candidate(evidence)], withdrawn: [] });
+export const input = () => ({ language: 'English', previous_summary: '', conversation: [{ ...rows[0], id: 's1' }],
+  new_segment_ids: ['s1'], topics: [], existing_issues: [] });
+
+export function workflowFor(t, path = ':memory:') {
+  const workflow = new Workflow(path, policy);
+  t.after(() => workflow.close());
+  workflow.openSession('session', settings);
+  return workflow;
+}
+
+export function seedDraft(workflow, { ready = true } = {}) {
+  const segments = transcript(rows);
+  workflow.applyAnalysis('session', segments, segments.map(s => s.id), analysis(segments.map(s => s.id)), [], 0);
+  if (ready) workflow.settle(60_000);
+  return workflow.list('session')[0];
+}
+
+export function mockGitHub() {
+  return { ...settings, list: mock.fn(async () => []), create: mock.fn(async payload => ({ ...payload, number: 42,
+    html_url: `https://github.com/${settings.repo}/issues/42` })) };
+}

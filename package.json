@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node --env-file=.env capture.mjs"
+    "start": "node --env-file=.env start.mjs",
+    "test": "node --import ./tests/support/offline.mjs --test --test-isolation=none tests/*.test.mjs",
+    "test:python": "python3 -m unittest discover -s tests -p 'test_*.py' -v"
   },
   "engines": {
     "node": ">=24.0.0"
