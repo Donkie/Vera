@@ -1,5 +1,9 @@
 # Vera
 
+<p align="center">
+  <img src="assets/branding/vera-readme-v2.png" alt="Vera — a female android assistant in charcoal, ivory and copper wearing a headset" width="640">
+</p>
+
 Vera turns project discussions into GitHub issue drafts that people can review and approve in Discord.
 
 It records voice separately for each speaker, transcribes locally, and uses Claude or Ollama to summarize the discussion and draft issues in your chosen language. Original transcript quotations remain attached to the proposed issue as evidence. Publishing always requires an authorized person's approval of the current revision.
