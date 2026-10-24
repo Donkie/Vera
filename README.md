@@ -104,7 +104,7 @@ Runs never overwrite source audio. Changing settings under an existing run name 
 
 ## Tests
 
-Run the same checks as GitHub Actions with Node.js 24+ and Python 3.11+:
+Run the tests with Node.js 24+ and Python 3.11+:
 
 ```bash
 npm ci
@@ -119,8 +119,30 @@ model weights, running model servers, Discord login or API credentials are requi
 Test network guards reject unmocked connections. Audio files and SQLite databases use
 temporary directories; the real data directory is never used.
 
-The workflow in `.github/workflows/tests.yml` runs both suites on pushes and pull requests.
-It installs only npm dependencies, with Hugging Face offline flags as an extra safeguard.
+Tests cover recording start/status/stop, Discord review commands and modals, original
+evidence preservation, approval invalidation, concurrent publication, uncertain POST
+recovery, preview-message recovery, and transcription watch/replay. They use real
+application logic with external boundaries mocked, so refactors can change internal
+structure while preserving the behavior these tests assert.
+
+For coverage reports and the same checks as GitHub Actions:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+npm run test:coverage
+npm run test:coverage:python
+```
+
+JavaScript uses Node's built-in V8 coverage, excluding tests and dependencies, and
+requires at least 95% lines, 85% branches and 90% functions. All seven application
+modules, including the Discord entry point, are exercised. Python uses `coverage.py`
+with branch measurement and a 95% combined statement/branch minimum for `transcribe.py`.
+The two tools count coverage differently; their percentages are reported separately.
+
+The workflow in `.github/workflows/tests.yml` runs coverage on pushes and pull requests
+and uploads `lcov.info` and `coverage-python.xml` as a `coverage` artifact. Its only
+Python dependency is the coverage tool; it never installs `requirements.txt` or
+downloads ML models. Hugging Face offline flags provide an extra safeguard.
 
 ## Current limits
 
