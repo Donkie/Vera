@@ -120,28 +120,36 @@ function modalFor(form, values) {
     customId: form.toJSON().custom_id, fields: { getTextInputValue: key => values[key] } };
 }
 
-test('/vera edit opens current content and its modal saves a corrected revision with original quotes', async t => {
+test('/vera edit sends the reviewer prompt and draft to the model and saves its rewrite with original quotes', async t => {
   const { workflow, github, review, announce } = reviewFor(t), draft = seedDraft(workflow);
+  review.rewriter = { rewrite: mock.fn(async () => ({ title: 'Corrected title', description: 'Confirmed by a developer.' })) };
   workflow.approve(publisher, draft.id, draft.revision, digest(draft));
   const edit = commandFor('edit', { id: draft.id });
   await review.handle(edit);
   const form = edit.showModal.mock.calls[0].arguments[0];
-  const fields = form.toJSON().components.map(row => row.components[0]);
-  assert.equal(fields.find(field => field.custom_id === 'description').value, draft.description);
-  assert.equal(fields.find(field => field.custom_id === 'evidence').value, draft.evidence[0].id);
-  const submit = modalFor(form, { title: 'Corrected title', description: 'Confirmed by a developer.',
-    evidence: '', duplicates: '17, 17, 18', heading: 'Original quotations' });
-  await review.handle(submit);
+  assert.deepEqual(form.toJSON().components.map(row => row.components[0].custom_id), ['prompt']);
+  await review.handle(modalFor(form, { prompt: 'Say it was confirmed.' }));
+  assert.deepEqual(review.rewriter.rewrite.mock.calls[0].arguments[0], { language: 'English', prompt: 'Say it was confirmed.',
+    title: draft.title, description: draft.description, evidence: draft.evidence });
   const updated = workflow.get(draft.id);
   assert.equal(updated.title, 'Corrected title');
   assert.equal(updated.description, 'Confirmed by a developer.');
   assert.equal(updated.approval, null);
   assert.equal(updated.state, 'ready');
-  assert.deepEqual(updated.duplicates, [17, 18]);
   assert.deepEqual(updated.evidence, draft.evidence);
-  assert.match(updated.body, /### Original quotations/);
+  assert.equal(workflow.history(draft.id).at(-1).detail.request, 'Say it was confirmed.');
+  assert.match(details(updated, workflow.history(draft.id), 1).embeds[0].description, /Say it was confirmed\./);
   assert.equal(announce.mock.callCount(), 1);
   assert.equal(github.create.mock.callCount(), 0);
+});
+
+test('an edit is not saved when the draft changes during the model call', async t => {
+  const { workflow, review } = reviewFor(t), draft = seedDraft(workflow);
+  review.rewriter = { rewrite: async () => { workflow.edit(reviewer, draft.id, draft.revision, 'Other', 'Other edit'); return { title: 'Late', description: 'Late' }; } };
+  const submit = modalFor({ toJSON: () => ({ custom_id: `edit:${draft.id}:${draft.revision}` }) }, { prompt: 'Fix it' });
+  await review.handle(submit);
+  assert.equal(workflow.get(draft.id).title, 'Other');
+  assert.match(submit.editReply.mock.calls.at(-1).arguments[0].content, /Draft changed/);
 });
 
 test('comment button/modal adds review history without changing the issue or approving it', async t => {

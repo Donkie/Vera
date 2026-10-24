@@ -98,7 +98,7 @@ Run commands in the configured review text channel.
 1. **Grant access.** A person with **Manage Server** permission runs `/vera access user:@person role:publisher`. Use `role:reviewer` for recording and review without publishing, or `role:none` to revoke access. Grants survive restarts; `/vera access` shows your access.
 2. **Record.** Tell everyone they will be recorded, then run `/vera start`. Vera joins the configured voice channel. Use `/vera status` while someone speaks to confirm the packet count increases.
 3. **Finish.** Run `/vera stop`. Keep Vera running while the remaining audio is transcribed and analyzed. Drafts appear after analysis and about a minute without new relevant discussion; CPU processing can add delay.
-4. **Review and publish.** Read each draft and its evidence. Use **Edit**, **Comment**, **Reject** or **Details & history**. Comments stay in review history; Edit changes the issue. A publisher clicks **Post issue** to approve the current revision. Long drafts require opening the full preview first; edits or new relevant discussion invalidate earlier approvals.
+4. **Review and publish.** Read each draft and its evidence. Use **Edit**, **Comment**, **Reject** or **Details & history**. Comments stay in review history. **Edit** asks the configured LLM to rewrite the title and description from your instructions (for example a misheard word or missing context); original quotes are kept. A publisher clicks **Post issue** to approve the current revision. Long drafts require opening the full preview first; edits or new relevant discussion invalidate earlier approvals.
 
 Other useful commands:
 

@@ -78,6 +78,25 @@ test('Claude rejects incomplete, empty and invalid results without exposing prov
   }
 });
 
+test('both providers rewrite a draft from the reviewer prompt, sending quotes as context and trimming old ones to fit', async () => {
+  const revised = { title: 'Cache fails', description: 'The cache fails on Windows.' };
+  const draft = { language: 'German', prompt: 'It was "cache", not "crash"', title: 'Crash', description: 'It crashes.',
+    evidence: [{ id: 'old', speaker: 'Ada', text: 'x'.repeat(30_000) }, { id: 'new', speaker: 'Bo', text: 'The crash fails on Windows.' }] };
+  for (const [analyzer, reply, read] of [
+    [OllamaAnalysis, value => Response.json({ done: true, message: { content: JSON.stringify(value) } }), body => [body.messages[0].content, body.messages[1].content, body.format]],
+    [ClaudeAnalysis, value => Response.json({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(value) }] }), body => [body.system, body.messages[0].content, body.output_config.format.schema]],
+  ]) {
+    const fetcher = mock.fn(async () => reply(revised)), model = new analyzer({ apiKey: 'test-key', fetcher });
+    assert.deepEqual(await model.rewrite(draft), revised);
+    const [system, content, format] = read(JSON.parse(fetcher.mock.calls[0].arguments[1].body));
+    assert.match(system, /in German\./);
+    assert.deepEqual(format.required, ['title', 'description']);
+    assert.deepEqual(JSON.parse(content), { request: draft.prompt, title: 'Crash', description: 'It crashes.',
+      evidence: analyzer === OllamaAnalysis ? [{ speaker: 'Bo', text: 'The crash fails on Windows.' }] : draft.evidence.map(({ speaker, text }) => ({ speaker, text })) });
+    model.close();
+  }
+});
+
 test('provider configuration and oversized context fail before any model request', async () => {
   assert.throws(() => createAnalysis({ LLM_PROVIDER: 'unknown' }), /LLM_PROVIDER/);
   assert.throws(() => createAnalysis({ LLM_PROVIDER: 'claude', ANTHROPIC_API_KEY: 'replace_me' }), /ANTHROPIC_API_KEY/);

@@ -289,31 +289,29 @@ test('GitHub startup rejects unavailable repositories and ambiguous validation r
   await assert.rejects(new GitHub(settings.repo, 'test-token', timeout).checkAccess(), /network error or timeout/);
 });
 
-test('human evidence exclusions and duplicate selections survive later model analysis', t => {
+test('human edits and saved evidence exclusions survive later model analysis', t => {
   const workflow = workflowFor(t);
   const segments = transcript([...rows, { ...rows[0], start: 3, end: 4, text: 'That first report was mistaken.' }]);
   const ids = segments.map(row => row.id), result = analysis(ids);
   workflow.applyAnalysis('session', segments, ids, result, [], 0); workflow.settle(60_000);
-  const draft = workflow.list()[0];
-  workflow.edit(reviewer, draft.id, draft.revision, 'Developer correction', 'Only the second report is relevant.', {
-    evidenceIds: [ids[1]], duplicates: [42], evidenceLabel: 'Relevant original quote',
-  });
+  const saved = workflow.list()[0];
+  // Exclusions written by the former evidence editor remain in existing databases.
+  workflow.save({ ...saved, excluded_evidence: [ids[0]], evidence: saved.evidence.slice(1) });
+  workflow.edit(reviewer, saved.id, saved.revision, 'Developer correction', 'Only the second report is relevant.', 'Drop the first report');
   workflow.applyAnalysis('session', segments, ids, analysis(ids), [], 1000);
-  const updated = workflow.get(draft.id);
+  const updated = workflow.get(saved.id);
   assert.deepEqual(updated.evidence.map(row => row.id), [ids[1]]);
-  assert.equal(updated.evidence[0].text, segments[1].text);
   assert.equal(updated.title, 'Developer correction');
-  assert.deepEqual(updated.duplicates, [42]);
-  assert.match(updated.body, /Relevant original quote/);
+  assert.equal(updated.description, 'Only the second report is relevant.');
   assert.ok(!updated.body.includes(segments[0].text));
 });
 
-test('invalid evidence or duplicate edits roll back the entire approved revision', t => {
+test('invalid edits roll back the entire approved revision', t => {
   const workflow = workflowFor(t), draft = seedDraft(workflow);
   workflow.approve(publisher, draft.id, draft.revision, digest(draft));
   const before = workflow.get(draft.id), history = workflow.history(draft.id);
-  for (const change of [{ evidenceIds: ['unknown'] }, { evidenceIds: [] }, { duplicates: [-1] }]) {
-    assert.throws(() => workflow.edit(reviewer, draft.id, draft.revision, 'Should not persist', 'Invalid edit', change));
+  for (const [title, description] of [['', 'Valid'], ['Valid', 'x'.repeat(3501)]]) {
+    assert.throws(() => workflow.edit(reviewer, draft.id, draft.revision, title, description));
     assert.deepEqual(workflow.get(draft.id), before);
     assert.deepEqual(workflow.history(draft.id), history);
   }

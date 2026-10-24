@@ -73,7 +73,7 @@ export async function createWorkflow({ root, client, guildId, textId, env = proc
     return pending;
   };
   const watcher = new TranscriptWatcher({ root, workflow, analyzer, publisherFor, announce, config: { mode, repo, language, label, sttRun: env.STT_RUN || 'live' } });
-  const review = new Review(workflow, publisherFor, announce, publishingEnabled);
+  const review = new Review(workflow, publisherFor, announce, publishingEnabled, analyzer);
   let timer;
   return {
     workflow, review, publishingEnabled,

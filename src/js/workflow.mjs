@@ -157,6 +157,7 @@ export class Workflow {
         const previous = this.list(sessionId).find(d => d.topic === candidate.topic);
         if (previous && (!editable.has(previous.state) || ['rejected', 'withdrawn'].includes(previous.state))) continue;
         if (previous?.human_edited) {
+          // Exclusions saved by the former evidence editor stay honored.
           candidate.evidence = candidate.evidence.filter(s => !(previous.excluded_evidence || []).includes(s.id));
           candidate.duplicates = previous.duplicates;
           candidate.evidence_label = previous.evidence_label;
@@ -199,27 +200,15 @@ export class Workflow {
       }
     });
   }
-  edit(context, id, revision, title, description, { evidenceIds, duplicates, evidenceLabel } = {}) {
+  edit(context, id, revision, title, description, request) {
     this.authorize(context);
     return this.transaction(() => {
       const draft = this.get(id);
       if (!editable.has(draft.state) || draft.revision !== revision) throw new Error('Draft changed or publication has started; reopen the current draft');
       draft.title = text(title, 'title', 200); draft.description = text(description, 'description', 3500);
-      if (evidenceIds !== undefined) {
-        const source = { ...this.session(draft.session_id).segments, ...Object.fromEntries(draft.evidence.map(s => [s.id, s])) };
-        if (!Array.isArray(evidenceIds) || !evidenceIds.length || evidenceIds.some(id => !source[id])) throw new Error('Select existing evidence IDs; original quotations cannot be rewritten');
-        draft.excluded_evidence = [...new Set([...(draft.excluded_evidence || []), ...draft.evidence.filter(s => !evidenceIds.includes(s.id)).map(s => s.id)])].filter(id => !evidenceIds.includes(id));
-        draft.evidence = [...new Set(evidenceIds)].map(id => source[id]);
-      }
-      if (duplicates !== undefined) {
-        if (!Array.isArray(duplicates) || duplicates.some(n => !Number.isSafeInteger(n) || n < 1)) throw new Error('Duplicate issue numbers must be positive integers');
-        draft.duplicates = [...new Set(duplicates)];
-        if (draft.duplicates.length && !draft.duplicates_label) draft.duplicates_label = 'GitHub';
-      }
-      if (evidenceLabel !== undefined) draft.evidence_label = text(evidenceLabel, 'evidence heading', 80);
       draft.body = text(body(draft), 'issue body', 60_000); draft.revision++; draft.approval = null; draft.human_edited = true;
       draft.state = 'ready'; this.save(draft);
-      this.event(id, 'edited', context.user, { revision: draft.revision, title: draft.title, description: draft.description, evidence: draft.evidence.map(s => s.id), duplicates: draft.duplicates });
+      this.event(id, 'edited', context.user, { revision: draft.revision, title: draft.title, description: draft.description, evidence: draft.evidence.map(s => s.id), ...(request ? { request } : {}) });
       return draft;
     });
   }

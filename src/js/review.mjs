@@ -1,5 +1,5 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionFlagsBits, escapeMarkdown } from 'discord.js';
-import { digest } from './workflow.mjs';
+import { digest, text } from './workflow.mjs';
 
 export const contextFor = interaction => ({ user: interaction.user.id, human: !interaction.user.bot, guild: interaction.guildId, channel: interaction.channelId,
   manageGuild: interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) === true });
@@ -39,7 +39,7 @@ function pages(value) {
 }
 export function details(draft, history = [], page = 0, publishingEnabled = true) {
   const bodyPages = pages(draft.body);
-  const entries = history.map(e => `${e.at} · ${e.user} · ${e.action}${typeof e.detail === 'string' ? `\n${e.detail}` : e.detail?.revision ? ` · revision ${e.detail.revision}` : ''}`);
+  const entries = history.map(e => `${e.at} · ${e.user} · ${e.action}${typeof e.detail === 'string' ? `\n${e.detail}` : e.detail?.revision ? ` · revision ${e.detail.revision}${e.detail.request ? `\n${e.detail.request}` : ''}` : ''}`);
   const all = [...bodyPages.map(text => ({ text, section: 'Full issue' })), ...pages(entries.join('\n\n') || 'No review history yet.').map(text => ({ text, section: 'Review history' }))];
   if (!Number.isSafeInteger(page) || page < 0 || page >= all.length) throw new Error('Invalid detail page');
   const buttons = [button('details', draft, 'Previous', ButtonStyle.Secondary, `:${page - 1}`).setDisabled(page === 0),
@@ -58,7 +58,7 @@ export function addReviewCommands(command, publishingEnabled = true) {
       { name: 'Publisher — reviewer plus issue publishing', value: 'publisher' }, { name: 'None — revoke access', value: 'none' })));
   command.addSubcommand(s => s.setName('drafts').setDescription('List issue drafts'));
   command.addSubcommand(s => s.setName('draft').setDescription('Read a draft and its action buttons').addStringOption(o => o.setName('id').setDescription('Draft ID').setRequired(true)));
-  command.addSubcommand(s => s.setName('edit').setDescription('Correct a draft; approval will be invalidated').addStringOption(o => o.setName('id').setDescription('Draft ID').setRequired(true)));
+  command.addSubcommand(s => s.setName('edit').setDescription('Ask the AI to revise a draft; approval will be invalidated').addStringOption(o => o.setName('id').setDescription('Draft ID').setRequired(true)));
   command.addSubcommand(s => s.setName('note').setDescription('Comment on a draft (not automatically published)').addStringOption(o => o.setName('id').setDescription('Draft ID').setRequired(true)).addStringOption(o => o.setName('text').setDescription('Developer comment').setMaxLength(2000).setRequired(true)));
   command.addSubcommand(s => s.setName('merge').setDescription('Combine two drafts and require a fresh approval').addStringOption(o => o.setName('keep').setDescription('Draft ID to keep').setRequired(true)).addStringOption(o => o.setName('remove').setDescription('Draft ID to merge into it').setRequired(true)));
   command.addSubcommand(s => s.setName('reject').setDescription('Reject a draft without creating an issue').addStringOption(o => o.setName('id').setDescription('Draft ID').setRequired(true)));
@@ -68,7 +68,7 @@ export function addReviewCommands(command, publishingEnabled = true) {
 }
 
 export class Review {
-  constructor(workflow, publisherFor, announce, publishingEnabled = true) { Object.assign(this, { workflow, publisherFor, announce, publishingEnabled }); }
+  constructor(workflow, publisherFor, announce, publishingEnabled = true, rewriter) { Object.assign(this, { workflow, publisherFor, announce, publishingEnabled, rewriter }); }
   async handle(interaction) {
     const buttonAction = interaction.isButton() ? interaction.customId.split(':')[0] : null;
     const modalAction = interaction.isModalSubmit() ? interaction.customId.split(':')[0] : null;
@@ -99,15 +99,9 @@ export class Review {
       if (action === 'edit' || buttonAction === 'edit') {
         draft ||= this.workflow.get(interaction.options.getString('id', true));
         if (!mutable.includes(draft.state)) throw new Error('Publication has started or this draft is closed');
-        const evidence = draft.evidence.map(s => s.id).join(', ');
-        const form = new ModalBuilder().setCustomId(`edit:${token(draft)}`).setTitle('Correct issue draft');
-        form.addComponents(
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('title').setLabel('Issue title').setStyle(TextInputStyle.Short).setMaxLength(200).setValue(draft.title)),
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('description').setLabel('Description (original evidence is kept)').setStyle(TextInputStyle.Paragraph).setMaxLength(3500).setValue(draft.description)),
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('evidence').setLabel('Evidence IDs (blank keeps current evidence)').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(4000).setValue(evidence.length <= 4000 ? evidence : '')),
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('duplicates').setLabel('Possible duplicate issue numbers, or blank').setStyle(TextInputStyle.Short).setRequired(false).setValue(draft.duplicates.join(', '))),
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('heading').setLabel('Evidence section heading').setStyle(TextInputStyle.Short).setMaxLength(80).setValue(draft.evidence_label)),
-        );
+        const form = new ModalBuilder().setCustomId(`edit:${token(draft)}`).setTitle('Revise issue draft with AI').addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('prompt').setLabel('What should the AI change?').setStyle(TextInputStyle.Paragraph).setMaxLength(2000)
+            .setPlaceholder('e.g. "crash" was misheard as "cache"; mention it only happens on Windows')));
         await interaction.showModal(form); return true;
       }
       if (buttonAction === 'note') {
@@ -128,12 +122,11 @@ export class Review {
         await interaction.editReply({ content: `GitHub issue: <${url}>`, components: [], embeds: [] });
         await this.announce(this.workflow.get(draft.id));
       } else if (modalAction === 'edit') {
-        const split = value => value.split(',').map(s => s.trim()).filter(Boolean);
-        const evidence = interaction.fields.getTextInputValue('evidence').trim();
-        const updated = this.workflow.edit(context, draft.id, draft.revision, interaction.fields.getTextInputValue('title'), interaction.fields.getTextInputValue('description'), {
-          evidenceIds: evidence ? split(evidence) : undefined,
-          duplicates: split(interaction.fields.getTextInputValue('duplicates')).map(Number), evidenceLabel: interaction.fields.getTextInputValue('heading'),
-        });
+        if (!mutable.includes(draft.state)) throw new Error('Publication has started or this draft is closed');
+        const prompt = text(interaction.fields.getTextInputValue('prompt'), 'edit request', 2000);
+        const { title, description } = await this.rewriter.rewrite({ language: draft.language, prompt, title: draft.title, description: draft.description, evidence: draft.evidence });
+        // workflow.edit rechecks the revision, so a draft changed during the model call is not overwritten.
+        const updated = this.workflow.edit(context, draft.id, draft.revision, title, description, prompt);
         await interaction.editReply({ content: 'Draft updated. Review the new version in the channel.' });
         await this.announce(updated);
       } else if (modalAction === 'note') {
