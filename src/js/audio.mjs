@@ -88,6 +88,9 @@ export class Capture {
       }
       this.buffers.delete(key);
     }
+    if (cutoff > this.flushedThrough || final) {
+      writeJson(join(this.directory, 'capture-progress.json'), { through: cutoff / RATE });
+    }
     this.flushedThrough = Math.max(this.flushedThrough, cutoff);
   }
 }

@@ -147,17 +147,32 @@ Only authorized human publishers in the configured server/channel can publish. E
 
 Each topic settles about one minute after its latest newly analyzed relevant evidence. Unrelated discussion does not reset that topic. Stopping waits for the final STT output before flushing remaining topics. Settled drafts can be reviewed while another analysis request is running.
 
+Transcription joins adjacent recording files for each speaker and waits for about one
+second of silence before processing a passage, keeping 200 ms of padding. Ongoing
+speech at a file boundary stays buffered. Long uninterrupted passages use windows of
+at most 30 seconds, with two seconds of previously processed context and a two-second
+uncommitted tail carried into the next window. Word timestamps select which window
+publishes each word. Other speakers do not delay that speaker's pause detection.
+The worker also detects silence when no further audio file is created for a speaker.
+Stopping flushes unfinished passages; atomic results preserve progress across restarts.
+The 12-second recording-file cadence and CPU inference add to the transcription delay.
+
 ## Recordings and replay
 
 `RECORDINGS_DIR` defaults to `./data`; both processes must use the same location. Each session stores per-speaker WAV chunks, speaker metadata, timestamps, receive errors, and separate transcription runs. Review state and publication attempts are stored in `data/workflow.sqlite` with SQLite WAL/SHM sidecars.
 
 Recordings are retained until you delete them. Budget roughly 0.7 GB per recorded speaker-hour. Restrict access and agree on retention with participants. Back up the database with the recordings; restoring an old database can lose publication state.
 
+For a clean start after upgrading from fixed-window transcription, stop Vera and
+clear the old contents of `RECORDINGS_DIR` before restarting. This removes recordings,
+transcripts, draft history and access grants. Keep `STT_RUN=live`; no run-name change
+is needed for a clean start.
+
 Replay retained audio with small in a separate run (including recordings originally transcribed with base):
 
 ```bash
 .venv/bin/python src/python/transcribe.py replay --session data/SESSION_ID \
-  --model KBLab/kb-whisper-small --run small-cpu
+  --model KBLab/kb-whisper-small --run small-pauses
 ```
 
 Runs never overwrite source audio. Changing settings under an existing run name fails to prevent mixed results. Failed chunks produce `.error.json` files; fix the cause and remove the affected error file to retry. Use one worker per run. Other spoken languages require a suitable multilingual model and `--language` setting. To analyze a different run, set `STT_RUN` and restart the bot.
@@ -206,7 +221,7 @@ downloads ML models. Hugging Face offline flags provide an extra safeguard.
 
 ## Current limits
 
-- Audio files use fixed 12-second windows. Each is transcribed independently, so boundaries can split words or sentences. Timing follows the local receive clock and is approximate.
+- Audio files use fixed 12-second windows; transcription combines them at speech pauses. A pause can still occur mid-sentence, and word timestamps around forced splits are approximate. Timing follows the local receive clock and is approximate. Validate boundaries on real Discord recordings.
 - The LLM receives up to 12 new transcript segments, 12 preceding segments, a running summary and existing topics. It is instructed to interpret likely STT errors from context and flag uncertain meaning, but it can still miss or misinterpret ideas. It cannot listen to saved audio. Review the evidence before publishing.
 - Oversized analysis context fails explicitly at 25 KB. Large repositories may need future retrieval support.
 - Discord voice receive is an unofficial API. Connection success alone does not establish that audio is being captured.

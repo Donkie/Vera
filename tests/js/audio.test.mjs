@@ -48,11 +48,13 @@ test('capture splits packets across 12-second windows with a half-second flush g
   capture.flush(12.49);
   assert.deepEqual(readdirSync(directory), []);
   capture.flush(12.5);
+  assert.equal(JSON.parse(readFileSync(join(directory, 'capture-progress.json'), 'utf8')).through, 12);
   const first = readFileSync(join(directory, '0-123.wav')).subarray(44);
   assert.equal(first.length, 12 * RATE * 4);
   assert.ok(first.subarray(0, 11.5 * RATE * 4).every(byte => byte === 0));
   assert.deepEqual(first.subarray(11.5 * RATE * 4), pcm.subarray(0, RATE * 2));
   capture.flush(12.5, true);
+  assert.equal(JSON.parse(readFileSync(join(directory, 'capture-progress.json'), 'utf8')).through, 12.5);
   assert.deepEqual(readFileSync(join(directory, '1-123.wav')).subarray(44), pcm.subarray(RATE * 2));
   assert.equal(JSON.parse(readFileSync(join(directory, '1-123.job.json'), 'utf8')).duration, 0.5);
 });
@@ -66,5 +68,13 @@ test('capture rejects malformed input and never rewrites already flushed windows
   capture.add('456', 'Late speaker', Buffer.alloc(4), 1);
   capture.flush(13, true);
   assert.equal(capture.latePackets, 1);
-  assert.deepEqual(readdirSync(directory), []);
+  assert.deepEqual(readdirSync(directory), ['capture-progress.json']);
+  assert.equal(JSON.parse(readFileSync(join(directory, 'capture-progress.json'), 'utf8')).through, 13);
+});
+
+test('capture publishes progress through silent windows without creating audio jobs', t => {
+  const { capture, directory } = captureFor(t);
+  capture.flush(24.5);
+  assert.deepEqual(readdirSync(directory), ['capture-progress.json']);
+  assert.equal(JSON.parse(readFileSync(join(directory, 'capture-progress.json'), 'utf8')).through, 24);
 });

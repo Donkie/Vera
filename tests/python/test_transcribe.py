@@ -1,4 +1,5 @@
 import contextlib
+from array import array
 import io
 import json
 import runpy
@@ -27,11 +28,13 @@ class TranscribeTests(unittest.TestCase):
                                     device='cpu', compute_type=None, cpu_threads=2, language='sv')
 
         # Replace ML imports even when those packages are absent; no weights or pip install needed.
-        whisper, utils, onnx, psutil = [ModuleType(name) for name in
-                                       ('faster_whisper', 'faster_whisper.utils', 'onnxruntime', 'psutil')]
+        whisper, utils, onnx, psutil, audio, vad = [ModuleType(name) for name in
+            ('faster_whisper', 'faster_whisper.utils', 'onnxruntime', 'psutil',
+             'faster_whisper.audio', 'faster_whisper.vad')]
         self.model = Mock()
         self.model.transcribe.side_effect = lambda *args, **kwargs: (iter([
-            SimpleNamespace(start=0.1, end=1.5, text='  Spara-knappen fungerar inte.  '),
+            SimpleNamespace(start=0.1, end=1.5, text='  Spara-knappen fungerar inte.  ', words=[
+                SimpleNamespace(start=0.1, end=1.5, word=' Spara-knappen fungerar inte.')]),
             SimpleNamespace(start=1.5, end=2, text=' '),
         ]), SimpleNamespace(language='sv'))
         whisper.WhisperModel = Mock(return_value=self.model)
@@ -39,11 +42,16 @@ class TranscribeTests(unittest.TestCase):
         onnx.disable_telemetry_events = Mock()
         psutil.Process = Mock(return_value=SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=64 * 1024**2)))
         self.whisper, self.utils, self.onnx = whisper, utils, onnx
+        audio.decode_audio = Mock(side_effect=lambda path, sampling_rate: array('f', [1]) * round(
+            json.loads(Path(path).with_suffix('.job.json').read_text())['duration'] * sampling_rate))
+        vad.get_speech_timestamps = Mock(side_effect=lambda samples, **options: [{'start': 0, 'end': len(samples)}])
+        self.decode, self.vad = audio.decode_audio, vad.get_speech_timestamps
         numpy = ModuleType('numpy')
-        numpy.zeros = Mock(return_value=object())
+        numpy.zeros = Mock(side_effect=lambda size, dtype: array('f', [0]) * size)
         numpy.float32 = 'mock-float32'
         self.numpy = numpy
         self.enterContext(patch.dict(sys.modules, {'faster_whisper': whisper, 'faster_whisper.utils': utils,
+                                                 'faster_whisper.audio': audio, 'faster_whisper.vad': vad,
                                                  'onnxruntime': onnx, 'psutil': psutil, 'numpy': numpy}))
         self.enterContext(patch('src.python.transcribe.version', return_value='mock-version'))
         self.enterContext(patch.object(socket.socket, 'connect', side_effect=AssertionError('Network disabled in tests')))
@@ -52,6 +60,18 @@ class TranscribeTests(unittest.TestCase):
 
     def recognizer(self):
         return transcribe.Recognizer(self.args)
+
+    def write_job(self, index, start, duration=12, user_id='123', speaker='Ada'):
+        name = f'{index}-{user_id}'
+        transcribe.write_json(self.session / f'{name}.job.json', {
+            'audio': f'{name}.wav', 'user_id': user_id, 'speaker': speaker, 'start': start, 'duration': duration})
+        (self.session / f'{name}.wav').write_bytes(b'original recording')
+
+    def progress(self, through):
+        transcribe.write_json(self.session / 'capture-progress.json', {'through': through})
+
+    def output(self, run):
+        return json.loads((run / 'transcript.json').read_text())
 
     def test_recognizer_mocks_model_download_and_cpu_initialization(self):
         recognizer = self.recognizer()
@@ -75,9 +95,9 @@ class TranscribeTests(unittest.TestCase):
             rows, elapsed = recognizer.transcribe(self.audio)
         self.assertEqual(rows, [{'start': 0.1, 'end': 1.5, 'text': 'Spara-knappen fungerar inte.'}])
         self.assertEqual(elapsed, 0.25)
-        self.model.transcribe.assert_called_once_with(str(self.audio), language='sv', beam_size=1,
-                                                     condition_on_previous_text=False, vad_filter=True,
-                                                     vad_parameters={'min_silence_duration_ms': 500})
+        self.model.transcribe.assert_called_once_with(self.audio, language='sv', beam_size=1,
+                                                     condition_on_previous_text=False, vad_filter=False,
+                                                     word_timestamps=True)
 
     def test_startup_check_exercises_vad_and_consumes_decoder_output(self):
         recognizer = self.recognizer()
@@ -87,9 +107,10 @@ class TranscribeTests(unittest.TestCase):
             def segments():
                 consumed.append(options['vad_filter'])
                 yield SimpleNamespace(text='ignored startup output')
-            self.assertIs(audio, self.numpy.zeros.return_value)
+            self.assertEqual(len(audio), 16_000)
             self.assertEqual(options['language'], 'sv')
             self.assertEqual(options['beam_size'], 1)
+            self.assertTrue(options['word_timestamps'])
             return segments(), None
 
         self.model.transcribe.side_effect = inference
@@ -139,11 +160,11 @@ class TranscribeTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 transcribe.prepare_run(self.session, name, config)
 
-    def test_process_job_writes_absolute_timestamps_metrics_and_transcripts_once(self):
+    def test_session_writes_absolute_timestamps_metrics_and_transcripts_once(self):
         recognizer = self.recognizer()
         run = transcribe.prepare_run(self.session, 'live', recognizer.config)
-        transcribe.process_job(self.path, run, recognizer)
-        result = json.loads((run / 'chunks' / '0-123.result.json').read_text())
+        transcribe.process_session(self.session, run, recognizer, final=True)
+        result = json.loads((run / 'chunks' / 'speech-123-192000.result.json').read_text())
         expected = [{'start': 12.1, 'end': 13.5, 'text': 'Spara-knappen fungerar inte.',
                      'user_id': '123', 'speaker': 'Ada'}]
         self.assertEqual(result['segments'], expected)
@@ -151,7 +172,7 @@ class TranscribeTests(unittest.TestCase):
         self.assertEqual(result['metrics']['rss_mib'], 64)
         self.assertEqual(json.loads((run / 'transcript.json').read_text()), expected)
         self.assertIn('[00:00:12.100–00:00:13.500] Ada (123)', (run / 'transcript.md').read_text())
-        transcribe.process_job(self.path, run, recognizer)
+        transcribe.process_session(self.session, run, recognizer, final=True)
         self.model.transcribe.assert_called_once()
         self.assertEqual(self.audio.read_bytes(), b'mocked audio; never decoded by ML')
         self.assertEqual(list(run.rglob('*.tmp')), [])
@@ -160,12 +181,183 @@ class TranscribeTests(unittest.TestCase):
         recognizer = self.recognizer()
         self.model.transcribe.side_effect = RuntimeError('Mock inference failed')
         run = transcribe.prepare_run(self.session, 'live', recognizer.config)
-        transcribe.process_job(self.path, run, recognizer)
-        error = json.loads((run / 'chunks' / '0-123.error.json').read_text())
-        self.assertEqual(error, {'error': 'Mock inference failed', 'source_job': self.path.name})
-        self.assertFalse((run / 'chunks' / '0-123.result.json').exists())
-        transcribe.process_job(self.path, run, recognizer)
+        transcribe.process_session(self.session, run, recognizer, final=True)
+        error = json.loads((run / 'chunks' / 'speech-123-192000.error.json').read_text())
+        self.assertEqual(error, {'error': 'Mock inference failed', 'user_id': '123', 'start': 12})
+        self.assertFalse((run / 'chunks' / 'speech-123-192000.result.json').exists())
+        self.assertFalse((run / 'complete.json').exists())
+        transcribe.process_session(self.session, run, recognizer, final=True)
         self.model.transcribe.assert_called_once()
+
+    def test_speech_crossing_file_boundary_waits_for_a_pause_and_is_transcribed_together(self):
+        self.write_job(0, 0)
+        self.progress(12)
+        recognizer = self.recognizer()
+        run = transcribe.prepare_run(self.session, 'live', recognizer.config)
+        self.vad.side_effect = [[{'start': 8 * transcribe.RATE, 'end': 12 * transcribe.RATE}],
+                                [{'start': round(0.2 * transcribe.RATE), 'end': round(4.2 * transcribe.RATE)}],
+                                [{'start': round(0.2 * transcribe.RATE), 'end': round(10.2 * transcribe.RATE)}], []]
+        self.model.transcribe.side_effect = lambda *args, **kwargs: (iter([
+            SimpleNamespace(text='A complete sentence', words=[
+                SimpleNamespace(start=0.2, end=10.2, word='A complete sentence')])]), None)
+        transcribe.process_session(self.session, run, recognizer)
+        self.model.transcribe.assert_not_called()
+        self.assertEqual(self.output(run), [])
+        self.assertFalse((run / 'complete.json').exists())
+
+        self.write_job(1, 12)
+        self.progress(24)
+        transcribe.process_session(self.session, run, recognizer)
+        self.assertEqual(len(self.model.transcribe.call_args.args[0]), round(10.4 * transcribe.RATE))
+        self.model.transcribe.assert_called_once()
+        self.assertEqual(len(self.output(run)), 1)
+        self.assertEqual((self.output(run)[0]['start'], self.output(run)[0]['end']), (8, 18))
+        self.assertEqual(self.decode.call_count, 5)
+        self.vad.assert_called_with(self.vad.call_args.args[0], min_silence_duration_ms=1000, speech_pad_ms=0)
+
+    def test_speaker_going_quiet_finishes_without_another_audio_file(self):
+        self.write_job(0, 0)
+        self.progress(12)
+        recognizer = self.recognizer()
+        run = transcribe.prepare_run(self.session, 'live', recognizer.config)
+        self.vad.side_effect = [[{'start': 0, 'end': 12 * transcribe.RATE}],
+                                [{'start': 0, 'end': 12 * transcribe.RATE}], []]
+        transcribe.process_session(self.session, run, recognizer)
+        self.model.transcribe.assert_not_called()
+        self.progress(24)
+        transcribe.process_session(self.session, run, recognizer)
+        samples = self.model.transcribe.call_args.args[0]
+        self.assertEqual(len(samples), round(12.2 * transcribe.RATE))
+        self.assertTrue(all(value == 0 for value in samples[12 * transcribe.RATE:]))
+        self.model.transcribe.assert_called_once()
+
+    def test_simultaneous_speakers_have_independent_audio_and_pause_detection(self):
+        self.write_job(0, 0)
+        self.write_job(0, 0, user_id='456', speaker='Bo')
+        self.progress(12)
+        self.decode.side_effect = lambda path, sampling_rate: array('f', [1 if '123' in path else 2]) * (12 * sampling_rate)
+        self.vad.side_effect = [[{'start': 0, 'end': 5 * transcribe.RATE}], [],
+                                [{'start': 0, 'end': 12 * transcribe.RATE}]]
+        recognizer = self.recognizer()
+        run = transcribe.prepare_run(self.session, 'live', recognizer.config)
+        transcribe.process_session(self.session, run, recognizer)
+        self.assertEqual([row['user_id'] for row in self.output(run)], ['123'])
+        self.assertTrue(all(value == 1 for value in self.model.transcribe.call_args.args[0]))
+        self.vad.side_effect = lambda audio, **options: [{'start': 0, 'end': len(audio)}]
+        transcribe.process_session(self.session, run, recognizer, final=True)
+        self.assertEqual({row['user_id'] for row in self.output(run)}, {'123', '456'})
+        self.assertTrue(all(value == 2 for value in self.model.transcribe.call_args.args[0]))
+
+    def test_long_speech_carries_context_and_emits_overlap_words_once_after_restart(self):
+        for index in range(4):
+            self.write_job(index, index * 12)
+        self.progress(48)
+
+        def inference(audio, **options):
+            words = ([SimpleNamespace(start=1, end=2, word='Start'),
+                      SimpleNamespace(start=27, end=27.5, word=' shared'),
+                      SimpleNamespace(start=27.8, end=28.2, word=' boundary')]
+                     if len(audio) == 30 * transcribe.RATE else
+                     [SimpleNamespace(start=1, end=1.5, word=' shared'),
+                      SimpleNamespace(start=1.8, end=2.2, word=' boundary'),
+                      SimpleNamespace(start=5, end=5.5, word=' shared')])
+            return iter([SimpleNamespace(text='speech', words=words)]), None
+
+        self.model.transcribe.side_effect = inference
+        recognizer = self.recognizer()
+        run = transcribe.prepare_run(self.session, 'live', recognizer.config)
+        transcribe.process_session(self.session, run, recognizer)
+        self.assertEqual([row['text'] for row in self.output(run)], ['Start shared'])
+        self.model.transcribe.assert_called_once()
+        self.assertFalse((run / 'complete.json').exists())
+        # A fresh recognizer resumes solely from atomic result files, including the uncommitted tail.
+        transcribe.process_session(self.session, run, self.recognizer(), final=True)
+        self.assertEqual([row['text'] for row in self.output(run)], ['Start shared', 'boundary shared'])
+        self.assertEqual(self.output(run)[1]['start'], 27.8)
+        self.assertEqual([len(call.args[0]) / transcribe.RATE for call in self.model.transcribe.call_args_list], [30, 22])
+        self.assertEqual(json.loads((run / 'complete.json').read_text())['source_jobs'],
+                         [f'{index}-123.job.json' for index in range(4)])
+        transcribe.process_session(self.session, run, recognizer, final=True)
+        self.assertEqual(self.model.transcribe.call_count, 2)
+
+    def test_stop_flushes_a_short_unfinished_passage_and_silence_does_not_hallucinate(self):
+        self.write_job(0, 0, duration=0.5)
+        self.progress(0.5)
+        self.model.transcribe.side_effect = lambda *args, **kwargs: (iter([
+            SimpleNamespace(text='Hello', words=[SimpleNamespace(start=0.1, end=0.4, word='Hello')])]), None)
+        recognizer = self.recognizer()
+        run = transcribe.prepare_run(self.session, 'live', recognizer.config)
+        transcribe.process_session(self.session, run, recognizer)
+        self.model.transcribe.assert_not_called()
+        transcribe.process_session(self.session, run, recognizer, final=True)
+        self.assertEqual(len(self.output(run)), 1)
+        self.assertTrue((run / 'complete.json').exists())
+
+        silent = transcribe.prepare_run(self.session, 'silent', recognizer.config)
+        self.vad.side_effect = lambda audio, **options: []
+        transcribe.process_session(self.session, silent, recognizer, final=True)
+        self.assertEqual(self.output(silent), [])
+        self.model.transcribe.assert_called_once()
+        self.assertTrue((silent / 'complete.json').exists())
+
+    def test_corrupt_audio_records_an_error_and_can_be_retried_without_losing_the_tail(self):
+        recognizer = self.recognizer()
+        run = transcribe.prepare_run(self.session, 'live', recognizer.config)
+        self.decode.side_effect = lambda path, sampling_rate: array('f', [0])
+        transcribe.process_session(self.session, run, recognizer, final=True)
+        error = run / 'chunks' / 'speech-123-192000.error.json'
+        self.assertIn('duration does not match', json.loads(error.read_text())['error'])
+        self.assertFalse((run / 'complete.json').exists())
+        error.unlink()
+        self.decode.side_effect = lambda path, sampling_rate: array('f', [1]) * (2 * sampling_rate)
+        transcribe.process_session(self.session, run, recognizer, final=True)
+        self.assertEqual(len(self.output(run)), 1)
+        self.assertTrue((run / 'complete.json').exists())
+
+    def test_resampling_rounding_keeps_the_window_length_and_pads_one_missing_sample(self):
+        self.decode.side_effect = lambda path, sampling_rate: array('f', [1]) * (2 * sampling_rate - 1)
+        recognizer = self.recognizer()
+        run = transcribe.prepare_run(self.session, 'live', recognizer.config)
+        transcribe.process_session(self.session, run, recognizer, final=True)
+        samples = self.model.transcribe.call_args.args[0]
+        self.assertEqual(len(samples), 2 * transcribe.RATE)
+        self.assertEqual(samples[-1], 0)
+        self.assertTrue((run / 'complete.json').exists())
+
+    def test_long_leading_silence_does_not_count_toward_the_speech_limit(self):
+        for index in range(3):
+            self.write_job(index, index * 12)
+        self.progress(36)
+        self.vad.side_effect = [[{'start': 24 * transcribe.RATE, 'end': 30 * transcribe.RATE}],
+                                [{'start': transcribe.PADDING, 'end': round(12.2 * transcribe.RATE)}]]
+        recognizer = self.recognizer()
+        run = transcribe.prepare_run(self.session, 'live', recognizer.config)
+        transcribe.process_session(self.session, run, recognizer)
+        self.model.transcribe.assert_not_called()
+        self.assertEqual(self.output(run), [])
+        checkpoint = json.loads(next((run / 'chunks').glob('*.result.json')).read_text())
+        self.assertEqual(checkpoint['next_sample'], round(23.8 * transcribe.RATE))
+
+    def test_invalid_source_metadata_blocks_completion_until_its_error_is_cleared(self):
+        transcribe.write_json(self.path, {**self.job, 'audio': '../escape.wav'})
+        recognizer = self.recognizer()
+        run = transcribe.prepare_run(self.session, 'live', recognizer.config)
+        transcribe.process_session(self.session, run, recognizer, final=True)
+        error = run / 'chunks' / '0-123.error.json'
+        self.assertIn('WAV in the session directory', json.loads(error.read_text())['error'])
+        transcribe.write_json(self.path, self.job)
+        transcribe.process_session(self.session, run, recognizer, final=True)
+        self.model.transcribe.assert_not_called()
+        self.assertFalse((run / 'complete.json').exists())
+        error.unlink()
+        transcribe.process_session(self.session, run, recognizer, final=True)
+        self.assertTrue((run / 'complete.json').exists())
+
+    def test_missing_word_timestamps_fail_instead_of_duplicating_uncertain_overlap(self):
+        self.model.transcribe.side_effect = lambda *args, **kwargs: (iter([
+            SimpleNamespace(text='speech', words=None)]), None)
+        with self.assertRaisesRegex(ValueError, 'Word timestamps are required'):
+            self.recognizer().transcribe(object())
 
     def test_render_sorts_overlapping_speakers_and_sanitizes_speaker_newlines(self):
         run = transcribe.prepare_run(self.session, 'live', {})
@@ -216,7 +408,7 @@ class TranscribeTests(unittest.TestCase):
         saved.mkdir()
         self.path.rename(saved / self.path.name)
         self.audio.rename(saved / self.audio.name)
-        transcribe.write_json(saved / 'session.json', {})
+        transcribe.write_json(saved / 'session.json', {'status': 'stopped'})
         arguments = ['transcribe.py', 'watch', '--root', str(self.session), '--run', 'base-comparison',
                      '--model', 'KBLab/kb-whisper-base']
         with patch.object(sys, 'argv', arguments), patch('src.python.transcribe.os.nice', create=True), \
@@ -227,6 +419,32 @@ class TranscribeTests(unittest.TestCase):
         self.assertEqual(json.loads((run / 'run.json').read_text())['model'], 'KBLab/kb-whisper-base')
         self.assertEqual(json.loads((run / 'transcript.json').read_text())[0]['speaker'], 'Ada')
         self.assertEqual(self.model.transcribe.call_count, 3)
+
+    def test_watch_leaves_pending_audio_idle_until_stop_even_when_progress_does_not_change(self):
+        saved = self.session / 'saved-session'
+        saved.mkdir()
+        self.path.rename(saved / self.path.name)
+        self.audio.rename(saved / self.audio.name)
+        transcribe.write_json(saved / 'session.json', {'status': 'recording'})
+        transcribe.write_json(saved / 'capture-progress.json', {'through': 14})
+        polls = 0
+
+        def poll(_):
+            nonlocal polls
+            polls += 1
+            if polls == 2:
+                transcribe.write_json(saved / 'session.json', {'status': 'stopped'})
+            if polls == 3:
+                raise KeyboardInterrupt
+
+        with patch.object(sys, 'argv', ['transcribe.py', 'watch', '--root', str(self.session)]), \
+                patch('src.python.transcribe.os.nice', create=True), patch('src.python.transcribe.os.umask'), \
+                patch('src.python.transcribe.time.sleep', side_effect=poll):
+            with self.assertRaises(KeyboardInterrupt):
+                transcribe.main()
+        self.assertEqual(self.vad.call_count, 2)
+        self.assertEqual(self.model.transcribe.call_count, 3)
+        self.assertTrue((saved / 'recognitions' / 'live' / 'complete.json').exists())
 
     def test_script_entry_point_handles_ctrl_c_without_a_traceback(self):
         with patch.object(sys, 'argv', ['transcribe.py', 'watch', '--root', str(self.session)]), \

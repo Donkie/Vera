@@ -169,11 +169,17 @@ export class TranscriptWatcher {
           const run = this.config.sttRun;
           const path = join(directory, 'recognitions', run, 'transcript.json');
           if (!existsSync(path)) continue;
+          // Completion is published after the final transcript; read it first to avoid finishing with stale rows.
+          const completion = join(directory, 'recognitions', run, 'complete.json');
+          const completedJobs = existsSync(completion) ? JSON.parse(readFileSync(completion, 'utf8')).source_jobs : null;
           const rows = JSON.parse(readFileSync(path, 'utf8'));
           const jobs = readdirSync(directory).filter(f => f.endsWith('.job.json'));
           const chunks = join(directory, 'recognitions', run, 'chunks');
           const outputs = existsSync(chunks) ? readdirSync(chunks) : [];
-          const ended = info.status === 'stopped' && jobs.every(job => outputs.includes(job.replace('.job.json', '.result.json')));
+          const complete = completedJobs
+            ? hash(completedJobs) === hash([...jobs].sort())
+            : jobs.every(job => outputs.includes(job.replace('.job.json', '.result.json')));
+          const ended = info.status === 'stopped' && complete;
           const fingerprint = hash({ rows, ended });
           const sessionId = info.session_id || name;
           const saved = this.workflow.session(sessionId);

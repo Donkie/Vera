@@ -157,6 +157,23 @@ test('watcher waits for final STT chunks, announces once and never auto-approves
   assert.equal(github.create.mock.callCount(), 0);
 });
 
+test('watcher waits for speech tails and checks completion against every source job', async t => {
+  const { watcher, workflow, directory, chunks } = watcherFor(t, { analyze: async () => analysis() });
+  writeJson(join(chunks, 'speech-123-0.result.json'), { segments: rows });
+  await watcher.tick();
+  assert.equal(workflow.session('session').ended, false);
+  const completion = join(directory, 'recognitions', 'live', 'complete.json');
+  writeJson(completion, { source_jobs: [] });
+  await watcher.tick();
+  assert.equal(workflow.session('session').ended, false);
+  writeJson(completion, { source_jobs: ['0-123.job.json'] });
+  await watcher.tick();
+  assert.equal(workflow.session('session').ended, true);
+  writeJson(join(directory, '1-123.job.json'), {});
+  await watcher.tick();
+  assert.equal(workflow.session('session').ended, false);
+});
+
 test('local sessions analyze and settle drafts without a GitHub publisher', async t => {
   const workflow = workflowFor(t);
   workflow.openSession('local-session', { repo: null, mode: 'local', language: 'English' });
