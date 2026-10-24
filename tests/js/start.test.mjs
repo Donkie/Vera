@@ -2,15 +2,20 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { resolve } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { start } from '../../src/js/start.mjs';
 
-function launch(t, env = {}) {
+function launch(t, env = {}, ready = true) {
   t.mock.method(console, 'error', () => {});
+  t.mock.method(console, 'log', () => {});
   const worker = new EventEmitter(), bot = new EventEmitter(), signals = new EventEmitter();
+  worker.stdout = new PassThrough();
+  t.after(() => worker.stdout.destroy());
   worker.kill = mock.fn(); bot.kill = mock.fn();
   const children = [worker, bot];
   const spawnChild = mock.fn(() => children.shift());
   const result = start({ env, spawnChild, signals });
+  if (ready) worker.stdout.write('STT startup check passed.\n');
   return { worker, bot, signals, spawnChild, result };
 }
 
@@ -21,9 +26,9 @@ test('one launcher starts Python and the bot with shared environment and matchin
   assert.equal(python, resolve('.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'));
   assert.deepEqual(args, ['src/python/transcribe.py', 'watch', '--root', resolve(env.RECORDINGS_DIR), '--run', 'small-cpu', '--model', env.STT_MODEL]);
   assert.equal(options.env, env);
-  assert.equal(options.stdio, 'inherit');
+  assert.deepEqual(options.stdio, ['inherit', 'pipe', 'inherit']);
   assert.equal(options.detached, process.platform !== 'win32');
-  assert.deepEqual(spawnChild.mock.calls[1].arguments, [process.execPath, ['src/js/capture.mjs'], options]);
+  assert.deepEqual(spawnChild.mock.calls[1].arguments, [process.execPath, ['src/js/capture.mjs'], { ...options, stdio: 'inherit' }]);
   signals.emit('SIGINT');
   bot.emit('close', 0, null); worker.emit('close', 0, null);
   assert.equal(await result, 0);
@@ -88,4 +93,42 @@ test('hung children are killed after the shutdown deadline', async t => {
   assert.deepEqual(worker.kill.mock.calls.at(-1).arguments, ['SIGKILL']);
   bot.emit('close', null, 'SIGKILL'); worker.emit('close', null, 'SIGKILL');
   assert.equal(await result, 1);
+});
+
+test('the bot starts once, only after the STT success message is complete', async t => {
+  const { worker, bot, signals, spawnChild, result } = launch(t, {}, false);
+  assert.equal(spawnChild.mock.callCount(), 1);
+  worker.stdout.write('Loading local STT model...\nSTT startup check ');
+  assert.equal(spawnChild.mock.callCount(), 1);
+  worker.stdout.write('passed.\n');
+  assert.equal(spawnChild.mock.callCount(), 2);
+  worker.stdout.write('STT startup check passed.\n');
+  assert.equal(spawnChild.mock.callCount(), 2);
+  signals.emit('SIGTERM'); bot.emit('close', 0, null); worker.emit('close', 0, null);
+  assert.equal(await result, 0);
+});
+
+test('STT startup failure exits without launching the bot', async t => {
+  const { worker, spawnChild, result } = launch(t, {}, false);
+  worker.emit('close', 2, null);
+  assert.equal(await result, 2);
+  assert.equal(spawnChild.mock.callCount(), 1);
+});
+
+test('missing Python during startup exits without launching the bot', async t => {
+  const { worker, spawnChild, result } = launch(t, {}, false);
+  worker.emit('error', Object.assign(new Error('missing'), { code: 'ENOENT' }));
+  worker.emit('close', -2, null);
+  assert.equal(await result, 1);
+  assert.equal(spawnChild.mock.callCount(), 1);
+});
+
+test('shutdown during STT loading cannot launch the bot afterwards', async t => {
+  const { worker, signals, spawnChild, result } = launch(t, {}, false);
+  signals.emit('SIGINT');
+  assert.deepEqual(worker.kill.mock.calls[0].arguments, ['SIGINT']);
+  worker.stdout.write('STT startup check passed.\n');
+  assert.equal(spawnChild.mock.callCount(), 1);
+  worker.emit('close', 0, null);
+  assert.equal(await result, 0);
 });

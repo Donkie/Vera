@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { GatewayIntentBits, Routes, SlashCommandBuilder } from 'discord.js';
 import { createWorkflow } from '../../src/js/runtime.mjs';
-import { commandFor, githubAccessResponse } from './support/fixtures.mjs';
+import { commandFor, startupResponse } from './support/fixtures.mjs';
 
 async function botFor(t) {
   const root = mkdtempSync(join(tmpdir(), 'vera-discord-'));
@@ -19,7 +19,7 @@ async function botFor(t) {
   Object.assign(process.env, env);
   t.mock.method(console, 'log', () => {});
   t.mock.method(console, 'error', () => {});
-  t.mock.method(globalThis, 'fetch', githubAccessResponse);
+  t.mock.method(globalThis, 'fetch', startupResponse);
   const exitCode = process.exitCode;
   const signals = Object.fromEntries(['SIGINT', 'SIGTERM'].map(signal => [signal, process.listeners(signal)]));
   let runtime;

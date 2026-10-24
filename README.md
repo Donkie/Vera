@@ -85,7 +85,16 @@ npm start
 ```
 
 This starts the local transcription worker and Discord bot together, using `.venv`'s
-Python and the settings in `.env`. `RECORDINGS_DIR` and `STT_RUN` apply to both
+Python and the settings in `.env`. Startup loads the configured STT model and runs
+one second of synthetic silence through voice detection and the Whisper decoder.
+Only after that succeeds does the bot check GitHub (when configured) and make one
+synthetic LLM analysis request using the configured provider/model and the normal
+structured output format. No recorded audio or discussion is used by these checks.
+The Claude check incurs a small API charge on every startup; Ollama runs locally.
+Model downloads/loading and CPU inference can delay startup. Download, model load,
+inference, provider authentication, quota, connection, timeout or invalid output
+failures stop Vera before it connects to Discord. The STT worker reuses its loaded
+model for transcription after the check. `RECORDINGS_DIR` and `STT_RUN` apply to both
 processes. Ctrl+C stops both; the bot saves its final audio before the worker stops.
 Any unfinished transcription jobs resume on the next start. If either process fails,
 Vera stops the other and exits with an error.

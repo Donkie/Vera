@@ -4,13 +4,14 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkflow } from '../../src/js/runtime.mjs';
-import { settings, policy, seedDraft, commandFor, githubAccessResponse } from './support/fixtures.mjs';
+import { settings, policy, seedDraft, commandFor, githubAccessResponse, startupResponse } from './support/fixtures.mjs';
 import { digest } from '../../src/js/workflow.mjs';
 
 test('runtime wires Discord review to mocked GitHub HTTP and updates existing preview messages', async t => {
   const root = mkdtempSync(join(tmpdir(), 'vera-runtime-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const fetcher = t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url === 'http://localhost:11434/api/chat') return startupResponse(url, options);
     if (options.method !== 'POST' || options.body === '{"title":""}') return githubAccessResponse(url, options);
     return Response.json({ ...JSON.parse(options.body), number: 42, html_url: `https://github.com/${settings.repo}/issues/42` });
   });
@@ -29,7 +30,7 @@ test('runtime wires Discord review to mocked GitHub HTTP and updates existing pr
     LLM_PROVIDER: 'ollama', GITHUB_REPO: settings.repo, GITHUB_TOKEN: 'mock-token',
   } });
   assert.equal(runtime.publishingEnabled, true);
-  assert.equal(fetcher.mock.callCount(), 3);
+  assert.equal(fetcher.mock.callCount(), 4);
   fetcher.mock.resetCalls();
   t.after(() => { runtime.stop(); runtime.workflow.close(); });
   const user = '123456789012345678';
@@ -65,7 +66,7 @@ for (const code of [10008, 50013]) {
     const channel = { send: mock.fn(async () => message), messages: { fetch: mock.fn(async () => {
       throw Object.assign(new Error('Discord request failed'), { code });
     }) } };
-    t.mock.method(globalThis, 'fetch', githubAccessResponse);
+    t.mock.method(globalThis, 'fetch', startupResponse);
     const runtime = await createWorkflow({ root, client: { channels: { fetch: async () => channel } }, guildId: policy.guild, textId: policy.channel,
       env: { GITHUB_REPO: settings.repo, GITHUB_TOKEN: 'mock-token', DISCORD_CONTROLLER_IDS: user } });
     t.after(() => { runtime.stop(); runtime.workflow.close(); });
@@ -87,7 +88,7 @@ for (const env of [{}, { GITHUB_REPO: ' ', GITHUB_TOKEN: '' }]) {
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const warning = t.mock.method(console, 'warn', () => {});
     t.mock.method(console, 'log', () => {});
-    const fetcher = t.mock.method(globalThis, 'fetch', mock.fn());
+    const fetcher = t.mock.method(globalThis, 'fetch', startupResponse);
     let edited;
     const refreshed = new Promise(resolve => { edited = resolve; });
     const message = { id: 'old-preview', guildId: policy.guild, channelId: policy.channel, author: { bot: true, id: 'bot' },
@@ -108,7 +109,8 @@ for (const env of [{}, { GITHUB_REPO: ' ', GITHUB_TOKEN: '' }]) {
     await new Promise(setImmediate);
     assert.ok(!payload.components[0].toJSON().components.some(button => ['approve', 'reconcile'].includes(button.custom_id.split(':')[0])));
     assert.equal(runtime.workflow.get(draft.id).state, 'approved');
-    assert.equal(fetcher.mock.callCount(), 0);
+    assert.equal(fetcher.mock.callCount(), 1);
+    assert.equal(fetcher.mock.calls[0].arguments[0], 'http://localhost:11434/api/chat');
   });
 }
 
@@ -138,3 +140,55 @@ test('configured GitHub connection failure refuses startup before creating workf
   });
   assert.equal(existsSync(join(root, 'workflow.sqlite')), false);
 });
+
+for (const provider of ['ollama', 'claude']) {
+  test(`${provider} startup performs one synthetic analysis without recording or creating drafts`, async t => {
+    const root = mkdtempSync(join(tmpdir(), 'vera-llm-check-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    t.mock.method(console, 'warn', () => {});
+    t.mock.method(console, 'log', () => {});
+    const fetcher = t.mock.method(globalThis, 'fetch', startupResponse);
+    const runtime = await createWorkflow({ root, client: {}, guildId: policy.guild, textId: policy.channel,
+      env: { LLM_PROVIDER: provider, ANTHROPIC_API_KEY: 'test-key' } });
+    t.after(() => { runtime.stop(); runtime.workflow.close(); });
+    assert.equal(fetcher.mock.callCount(), 1);
+    const [url, options] = fetcher.mock.calls[0].arguments;
+    assert.equal(url, provider === 'claude' ? 'https://api.anthropic.com/v1/messages' : 'http://localhost:11434/api/chat');
+    const body = JSON.parse(options.body);
+    const request = JSON.parse(body.messages.at(-1).content);
+    assert.equal(request.conversation[0].text, 'Hello.');
+    assert.deepEqual(request.existing_issues, []);
+    assert.deepEqual(runtime.workflow.list(), []);
+    assert.ok(options.signal instanceof AbortSignal);
+  });
+
+  test(`${provider} startup refuses connection, authentication, model, quota and output failures`, async t => {
+    for (const failure of ['network', 'timeout', 401, 403, 404, 429, 503, 'unfinished', 'invalid JSON', 'invalid analysis']) {
+      await t.test(String(failure), async st => {
+        const root = mkdtempSync(join(tmpdir(), 'vera-llm-failure-'));
+        st.after(() => rmSync(root, { recursive: true, force: true }));
+        st.mock.method(console, 'warn', () => {});
+        st.mock.method(console, 'log', () => {});
+        let requestSignal;
+        st.mock.method(globalThis, 'fetch', async (_url, options) => {
+          requestSignal = options.signal;
+          if (failure === 'network') throw new TypeError('Cannot connect');
+          if (failure === 'timeout') throw new DOMException('Timed out', 'TimeoutError');
+          if (typeof failure === 'number') return new Response('SECRET provider details', { status: failure });
+          const content = failure === 'invalid JSON' ? '{' : '{}';
+          return Response.json(provider === 'claude'
+            ? { stop_reason: failure === 'unfinished' ? 'max_tokens' : 'end_turn', content: [{ type: 'text', text: content }] }
+            : { done: failure !== 'unfinished', message: { content } });
+        });
+        await assert.rejects(createWorkflow({ root, client: {}, guildId: policy.guild, textId: policy.channel,
+          env: { LLM_PROVIDER: provider, ANTHROPIC_API_KEY: 'test-key' } }), error => {
+          assert.match(error.message, /LLM startup check failed/);
+          assert.ok(!error.message.includes('SECRET'));
+          return true;
+        });
+        assert.equal(requestSignal.aborted, true);
+        assert.equal(existsSync(join(root, 'workflow.sqlite')), false);
+      });
+    }
+  });
+}

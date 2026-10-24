@@ -38,6 +38,14 @@ export function githubAccessResponse(url, options) {
   throw new Error('Unexpected GitHub access request');
 }
 
+export function startupResponse(url, options) {
+  if (url.startsWith('https://api.github.com/')) return githubAccessResponse(url, options);
+  const content = JSON.stringify({ summary: 'A greeting.', candidates: [], withdrawn: [] });
+  if (url === 'http://localhost:11434/api/chat') return Response.json({ done: true, message: { content } });
+  if (url === 'https://api.anthropic.com/v1/messages') return Response.json({ stop_reason: 'end_turn', content: [{ type: 'text', text: content }] });
+  throw new Error('Unexpected startup request');
+}
+
 export function commandFor(action, values = {}, context = reviewer) {
   return { user: { id: context.user, bot: !context.human }, guildId: context.guild, channelId: context.channel,
     memberPermissions: { has: () => context.manageGuild === true }, commandName: 'vera',

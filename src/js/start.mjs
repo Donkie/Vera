@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createInterface } from 'node:readline';
 
 export function start({ env = process.env, spawnChild = spawn, signals = process } = {}) {
   return new Promise(done => {
@@ -33,10 +34,9 @@ export function start({ env = process.env, spawnChild = spawn, signals = process
     const workerArgs = ['src/python/transcribe.py', 'watch', '--root', resolve(env.RECORDINGS_DIR || 'data'), '--run', env.STT_RUN || 'live'];
     if (env.STT_MODEL) workerArgs.push('--model', env.STT_MODEL);
     const python = resolve('.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
-    for (const [name, executable, args] of [
-      ['worker', python, workerArgs], ['bot', process.execPath, ['src/js/capture.mjs']],
-    ]) {
-      const child = spawnChild(executable, args, { env, stdio: 'inherit', detached: process.platform !== 'win32' });
+    const launch = (name, executable, args) => {
+      const child = spawnChild(executable, args, { env,
+        stdio: name === 'worker' ? ['inherit', 'pipe', 'inherit'] : 'inherit', detached: process.platform !== 'win32' });
       children.set(name, child);
       child.on('error', error => {
         console.error(name === 'worker'
@@ -54,7 +54,19 @@ export function start({ env = process.env, spawnChild = spawn, signals = process
           finish();
         }
       });
-    }
+      return child;
+    };
+    const worker = launch('worker', python, workerArgs);
+    const output = createInterface({ input: worker.stdout });
+    let botStarted = false;
+    output.on('line', line => {
+      console.log(line);
+      if (line === 'STT startup check passed.' && !stopping && !botStarted) {
+        botStarted = true;
+        launch('bot', process.execPath, ['src/js/capture.mjs']);
+      }
+    });
+    worker.on('close', () => output.close());
   });
 }
 

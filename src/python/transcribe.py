@@ -71,6 +71,16 @@ class Recognizer:
         self.model = WhisperModel(model_path, device=args.device, compute_type=self.config['compute_type'],
                                   cpu_threads=args.cpu_threads, num_workers=1, download_root=str(args.models))
 
+    def check(self):
+        import numpy as np
+        silence = np.zeros(16_000, dtype=np.float32)
+        # Silence exercises VAD; disabling it also forces the Whisper decoder to run.
+        for vad in (True, False):
+            segments, _ = self.model.transcribe(silence, language=self.config['language'], beam_size=1,
+                                                condition_on_previous_text=False, vad_filter=vad,
+                                                vad_parameters={'min_silence_duration_ms': 500})
+            list(segments)
+
     def transcribe(self, audio):
         start = time.perf_counter()
         segments, _ = self.model.transcribe(str(audio), language=self.config['language'], beam_size=1,
@@ -142,7 +152,12 @@ def main():
         os.nice(10)
     os.umask(0o077)
     print('Loading local STT model (first run may download weights)...', flush=True)
-    recognizer = Recognizer(args)
+    try:
+        recognizer = Recognizer(args)
+        recognizer.check()
+    except Exception as exc:
+        raise SystemExit(f'STT startup check failed: {exc}') from None
+    print('STT startup check passed.', flush=True)
     prepared = {}
     while True:
         sessions = [args.session] if args.command == 'replay' else sorted(args.root.glob('*/session.json'))

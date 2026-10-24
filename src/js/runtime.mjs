@@ -22,6 +22,17 @@ export async function createWorkflow({ root, client, guildId, textId, env = proc
     console.warn('\n' + '!'.repeat(72) + '\nWARNING: GITHUB PUBLISHING IS DISABLED\nGITHUB_REPO and GITHUB_TOKEN are unset. Recording, analysis and draft review\nremain available. GitHub posting controls and duplicate lookup are disabled.\n' + '!'.repeat(72) + '\n');
   }
   const analyzer = createAnalysis(env);
+  console.log(`Checking analysis model: ${analyzer.label}...`);
+  try {
+    const result = await analyzer.analyze({ language: 'English', previous_summary: '',
+      conversation: [{ id: 's1', start: 0, end: 1, user_id: 'startup', speaker: 'Startup check', text: 'Hello.' }],
+      new_segment_ids: ['s1'], topics: [], existing_issues: [] });
+    if (!result || typeof result.summary !== 'string' || !result.summary.trim() || !Array.isArray(result.candidates) || result.candidates.length || !Array.isArray(result.withdrawn) || result.withdrawn.length) throw new Error('Model returned an unexpected startup analysis');
+  } catch (error) {
+    analyzer.close();
+    throw new Error(`LLM startup check failed: ${error.message}. Check the configured provider, model, credentials and available resources.`);
+  }
+  console.log('LLM startup check passed.');
   const workflow = new Workflow(join(root, 'workflow.sqlite'), { editors, approvers, guild: guildId, channel: textId, mode });
   const publishers = new Map();
   const publisherFor = (publishMode, repository) => {

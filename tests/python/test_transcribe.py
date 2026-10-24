@@ -30,7 +30,7 @@ class TranscribeTests(unittest.TestCase):
         whisper, utils, onnx, psutil = [ModuleType(name) for name in
                                        ('faster_whisper', 'faster_whisper.utils', 'onnxruntime', 'psutil')]
         self.model = Mock()
-        self.model.transcribe.return_value = (iter([
+        self.model.transcribe.side_effect = lambda *args, **kwargs: (iter([
             SimpleNamespace(start=0.1, end=1.5, text='  Spara-knappen fungerar inte.  '),
             SimpleNamespace(start=1.5, end=2, text=' '),
         ]), SimpleNamespace(language='sv'))
@@ -39,8 +39,12 @@ class TranscribeTests(unittest.TestCase):
         onnx.disable_telemetry_events = Mock()
         psutil.Process = Mock(return_value=SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=64 * 1024**2)))
         self.whisper, self.utils, self.onnx = whisper, utils, onnx
+        numpy = ModuleType('numpy')
+        numpy.zeros = Mock(return_value=object())
+        numpy.float32 = 'mock-float32'
+        self.numpy = numpy
         self.enterContext(patch.dict(sys.modules, {'faster_whisper': whisper, 'faster_whisper.utils': utils,
-                                                 'onnxruntime': onnx, 'psutil': psutil}))
+                                                 'onnxruntime': onnx, 'psutil': psutil, 'numpy': numpy}))
         self.enterContext(patch('src.python.transcribe.version', return_value='mock-version'))
         self.enterContext(patch.object(socket.socket, 'connect', side_effect=AssertionError('Network disabled in tests')))
         self.enterContext(patch.object(socket, 'create_connection', side_effect=AssertionError('Network disabled in tests')))
@@ -74,6 +78,47 @@ class TranscribeTests(unittest.TestCase):
         self.model.transcribe.assert_called_once_with(str(self.audio), language='sv', beam_size=1,
                                                      condition_on_previous_text=False, vad_filter=True,
                                                      vad_parameters={'min_silence_duration_ms': 500})
+
+    def test_startup_check_exercises_vad_and_consumes_decoder_output(self):
+        recognizer = self.recognizer()
+        consumed = []
+
+        def inference(audio, **options):
+            def segments():
+                consumed.append(options['vad_filter'])
+                yield SimpleNamespace(text='ignored startup output')
+            self.assertIs(audio, self.numpy.zeros.return_value)
+            self.assertEqual(options['language'], 'sv')
+            self.assertEqual(options['beam_size'], 1)
+            return segments(), None
+
+        self.model.transcribe.side_effect = inference
+        recognizer.check()
+        self.numpy.zeros.assert_called_once_with(16_000, dtype='mock-float32')
+        self.assertEqual(consumed, [True, False])
+
+    def test_startup_failure_stops_before_ready_or_processing_sessions(self):
+        for failure in ('download', 'load', 'vad', 'decode'):
+            with self.subTest(failure=failure):
+                self.utils.download_model.side_effect = RuntimeError('download failed') if failure == 'download' else None
+                self.whisper.WhisperModel.side_effect = RuntimeError('load failed') if failure == 'load' else None
+
+                def inference(audio, **options):
+                    def segments():
+                        if failure == ('vad' if options['vad_filter'] else 'decode'):
+                            raise RuntimeError(f'{failure} failed')
+                        yield SimpleNamespace(text='ignored startup output')
+                    return segments(), None
+
+                self.model.transcribe.side_effect = inference
+                output = io.StringIO()
+                with patch.object(sys, 'argv', ['transcribe.py', 'watch', '--root', str(self.session)]), \
+                        patch('src.python.transcribe.os.nice', create=True), patch('src.python.transcribe.os.umask'), \
+                        patch('src.python.transcribe.prepare_run') as prepare, contextlib.redirect_stdout(output):
+                    with self.assertRaisesRegex(SystemExit, f'STT startup check failed: {failure} failed'):
+                        transcribe.main()
+                self.assertNotIn('STT startup check passed.', output.getvalue())
+                prepare.assert_not_called()
 
     def test_job_validation_rejects_unsafe_paths_and_bad_metadata(self):
         for key, value in [('audio', '../outside.wav'), ('audio', 'audio.mp3'), ('user_id', '../123'),
@@ -150,7 +195,8 @@ class TranscribeTests(unittest.TestCase):
         transcribe.write_json(self.session / 'session.json', {})
         self.model.transcribe.side_effect = RuntimeError('Mock inference failed')
         with patch.object(sys, 'argv', ['transcribe.py', 'replay', '--session', str(self.session)]), \
-                patch('src.python.transcribe.os.nice', create=True), patch('src.python.transcribe.os.umask'):
+                patch('src.python.transcribe.os.nice', create=True), patch('src.python.transcribe.os.umask'), \
+                patch.object(transcribe.Recognizer, 'check'):
             with self.assertRaisesRegex(SystemExit, 'failed chunks'):
                 transcribe.main()
 
@@ -180,7 +226,7 @@ class TranscribeTests(unittest.TestCase):
         run = saved / 'recognitions' / 'base-comparison'
         self.assertEqual(json.loads((run / 'run.json').read_text())['model'], 'KBLab/kb-whisper-base')
         self.assertEqual(json.loads((run / 'transcript.json').read_text())[0]['speaker'], 'Ada')
-        self.model.transcribe.assert_called_once()
+        self.assertEqual(self.model.transcribe.call_count, 3)
 
     def test_script_entry_point_handles_ctrl_c_without_a_traceback(self):
         with patch.object(sys, 'argv', ['transcribe.py', 'watch', '--root', str(self.session)]), \
@@ -188,7 +234,7 @@ class TranscribeTests(unittest.TestCase):
                 patch('src.python.transcribe.time.sleep', side_effect=KeyboardInterrupt), \
                 patch('importlib.metadata.version', return_value='mock-version'):
             runpy.run_path(str(Path(transcribe.__file__)), run_name='__main__')
-        self.model.transcribe.assert_not_called()
+        self.assertEqual(self.model.transcribe.call_count, 2)
 
 
 if __name__ == '__main__':
