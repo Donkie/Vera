@@ -1,0 +1,17 @@
+services:
+  vera:
+    build: .
+    env_file:
+      - .env
+    environment:
+      RECORDINGS_DIR: /app/data
+    volumes:
+      - vera-data:/app/data
+      - vera-models:/app/models
+    init: true
+    stop_grace_period: 20s
+    restart: unless-stopped
+
+volumes:
+  vera-data:
+  vera-models:

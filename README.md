@@ -84,6 +84,30 @@ model settings fails deliberately. To keep using base instead, set
 
 In the configured review channel, a person with **Manage Server** permission grants access with `/vera access user:@person role:publisher`. Reviewer access permits recording and draft review; Publisher also permits issue creation. `/vera access` shows your access, and `role:none` revokes it. Grants persist across restarts. Revocation cancels approvals whose publication has not started; it cannot undo an in-flight or completed GitHub request.
 
+## Docker
+
+Copy `.env.example` to `.env` and fill in your settings, then run:
+
+```bash
+docker compose up --build -d
+docker compose logs -f vera
+```
+
+The included `compose.yaml` loads `.env` with `env_file`. The image installs Node.js 24,
+Python 3.11 and both sets of dependencies, then runs the same launcher as `npm start`
+directly so it receives Docker's shutdown signal. This starts both transcription and
+the Discord bot. Secrets, local recordings and model files are excluded from the build.
+
+Named volumes retain recordings/review state and downloaded STT models across container
+replacements. Compose sets `RECORDINGS_DIR=/app/data` so both processes use the persistent
+volume. Existing host `data/` and `models/` directories are not imported. The first start
+downloads the STT model. Use `docker compose down` to stop Vera and retain its volumes;
+adding `--volumes` deletes the stored recordings, review state and models.
+
+For Ollama, set `OLLAMA_URL` in `.env` to an address reachable from the container;
+`localhost` inside the container refers to Vera itself. After editing `.env`, run
+`docker compose up -d --force-recreate` to apply the new settings.
+
 ## Recording and review
 
 - `/vera start` posts a recording notice and joins the voice channel. Tell participants before recording.
